@@ -390,6 +390,9 @@ func TestKeyBackupRestore(t *testing.T) {
 	if out := r.run("n\n", false, "--config", cfgPath, "restore", snapshot); !strings.Contains(out, "kept") {
 		t.Errorf("declined restore: %q", out)
 	}
+	if out := r.run("Yes\n", false, "--config", cfgPath, "restore", snapshot); !strings.Contains(out, "restored") {
+		t.Errorf("restore should take Yes like delete does: %q", out)
+	}
 	// No FILE argument: restore from the configured folder.
 	out = r.run("", false, "--config", cfgPath, "restore", "-y")
 	if !strings.Contains(out, "restored") || !strings.Contains(out, snapshot) || !strings.Contains(out, ".bak") {
@@ -420,6 +423,19 @@ func TestGoaltrackerPathFromConfig(t *testing.T) {
 	r.run("", false, "project", "add", "house", "--goal", "3")
 	if out := r.run("", false, "--config", cfgPath, "project", "show", "1"); !strings.Contains(out, "#3 run 500 km") {
 		t.Errorf("config path not used:\n%s", out)
+	}
+}
+
+func TestGoalReaderReportsBadConfig(t *testing.T) {
+	r := newRunner(t)
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("[goaltracker\ndb = 1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.run("", false, "project", "add", "house", "--goal", "3")
+	_, errOut := r.runBoth("", false, "--config", cfgPath, "project", "show", "1")
+	if !strings.Contains(errOut, "note: config:") || !strings.Contains(errOut, "goal statements not shown") {
+		t.Errorf("bad config not reported: %q", errOut)
 	}
 }
 

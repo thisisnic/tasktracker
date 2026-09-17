@@ -157,14 +157,9 @@ running tasktracker first.`,
 			default:
 				return fmt.Errorf("no backup file given and no backup folder in %s", *cfgPath)
 			}
-			if !yes {
-				fmt.Fprintf(cmd.OutOrStdout(), "replace %s with %s? The current database is kept as .bak [y/N] ", *dbPath, file)
-				var answer string
-				fmt.Fscanln(cmd.InOrStdin(), &answer)
-				if answer != "y" && answer != "Y" && answer != "yes" {
-					fmt.Fprintln(cmd.OutOrStdout(), "kept")
-					return nil
-				}
+			if !yes && !confirm(cmd, fmt.Sprintf("replace %s with %s? The current database is kept as .bak", *dbPath, file)) {
+				fmt.Fprintln(cmd.OutOrStdout(), "kept")
+				return nil
 			}
 			kept, err := backup.Restore(file, config.ExpandHome(identity), *dbPath, time.Now())
 			if err != nil {

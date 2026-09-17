@@ -170,7 +170,7 @@ func projectShowCmd(dbPath, cfgPath *string) *cobra.Command {
 			}
 			// Goal statements are a nicety: without goaltracker's database
 			// the ids are shown bare and the reason goes to stderr.
-			goals, goalErr := goalReader(*cfgPath).Lookup(cmd.Context(), p.GoalIDs)
+			goals, goalErr := goalReader(cmd, *cfgPath).Lookup(cmd.Context(), p.GoalIDs)
 			if goalErr != nil {
 				fmt.Fprintf(cmd.ErrOrStderr(), "note: goal statements not shown: %v\n", goalErr)
 			}

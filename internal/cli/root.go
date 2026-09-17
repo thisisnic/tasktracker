@@ -90,10 +90,15 @@ func openStore(path *string) (*task.Store, error) {
 }
 
 // goalReader looks goals up in goaltracker's database: the one named in
-// the config, or goaltracker's own default location.
-func goalReader(cfgPath string) *goallink.Reader {
+// the config, or goaltracker's own default location. A config that cannot
+// be read is reported, since it may be the one naming the database, and
+// the default location is used.
+func goalReader(cmd *cobra.Command, cfgPath string) *goallink.Reader {
 	cfg, err := config.Load(cfgPath)
-	if err == nil && cfg.Goaltracker.DB != "" {
+	if err != nil {
+		fmt.Fprintf(cmd.ErrOrStderr(), "note: config: %v; using goaltracker's default database\n", err)
+	}
+	if cfg.Goaltracker.DB != "" {
 		return goallink.New(cfg.Goaltracker.DB)
 	}
 	return goallink.New(goallink.DefaultPath())
