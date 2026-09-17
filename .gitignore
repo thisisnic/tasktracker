@@ -1,0 +1,6 @@
+# roborev snapshots
+/.roborev/
+
+# build output
+/tasktracker
+/dist/
