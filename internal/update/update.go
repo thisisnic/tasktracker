@@ -237,7 +237,7 @@ func fetch(ctx context.Context, client *http.Client, url string) ([]byte, error)
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s: %s", url, resp.Status)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, maxDownload))
+	return readCapped(resp.Body, url)
 }
 
 func archiveName(version, goos, goarch string) string {
@@ -281,7 +281,7 @@ func extractBinary(archive []byte, archiveName, binary string) ([]byte, error) {
 					return nil, err
 				}
 				defer rc.Close()
-				return io.ReadAll(io.LimitReader(rc, maxDownload))
+				return readCapped(rc, binary)
 			}
 		}
 		return nil, fmt.Errorf("%s does not contain %s", archiveName, binary)
@@ -300,9 +300,23 @@ func extractBinary(archive []byte, archiveName, binary string) ([]byte, error) {
 			return nil, fmt.Errorf("read %s: %w", archiveName, err)
 		}
 		if hdr.Typeflag == tar.TypeReg && filepath.Base(hdr.Name) == binary {
-			return io.ReadAll(io.LimitReader(tr, maxDownload))
+			return readCapped(tr, binary)
 		}
 	}
+}
+
+// readCapped reads all of r, failing rather than truncating when it is
+// larger than maxDownload. A truncated archive would fail its checksum,
+// but a truncated binary inside a valid archive would not.
+func readCapped(r io.Reader, name string) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxDownload+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxDownload {
+		return nil, fmt.Errorf("%s is larger than %d bytes", name, maxDownload)
+	}
+	return data, nil
 }
 
 // replace writes bin beside exe and renames it into place, keeping the
@@ -342,8 +356,10 @@ func replace(exe string, bin []byte) error {
 			return err
 		}
 		if err := os.Rename(tmpPath, exe); err != nil {
-			os.Rename(old, exe)
 			cleanup()
+			if restoreErr := os.Rename(old, exe); restoreErr != nil {
+				return fmt.Errorf("replace %s: %w; the old binary is at %s: %v", exe, err, old, restoreErr)
+			}
 			return err
 		}
 		return nil

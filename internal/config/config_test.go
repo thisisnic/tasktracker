@@ -17,7 +17,9 @@ func TestLoadExpandsHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	p := filepath.Join(t.TempDir(), "config.toml")
-	os.WriteFile(p, []byte(Example("age1abc", "~/.config/tasktracker/key.txt")), 0o600)
+	if err := os.WriteFile(p, []byte(Example("age1abc", "~/.config/tasktracker/key.txt")), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	c, err := Load(p)
 	if err != nil {
 		t.Fatal(err)
@@ -30,9 +32,27 @@ func TestLoadExpandsHome(t *testing.T) {
 	}
 }
 
+func TestLoadExpandsGoaltrackerDB(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	p := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(p, []byte("[goaltracker]\ndb = \"~/g/goaltracker.db\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Goaltracker.DB != filepath.Join(home, "g", "goaltracker.db") {
+		t.Errorf("Goaltracker.DB = %q, not expanded", c.Goaltracker.DB)
+	}
+}
+
 func TestLoadBadTOML(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "config.toml")
-	os.WriteFile(p, []byte("[backup\ndir = 1"), 0o600)
+	if err := os.WriteFile(p, []byte("[backup\ndir = 1"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := Load(p); err == nil {
 		t.Error("bad TOML accepted")
 	}
