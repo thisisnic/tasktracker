@@ -2,8 +2,10 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/thisisnic/tasktracker/internal/config"
 	"github.com/thisisnic/tasktracker/internal/task"
 	"github.com/thisisnic/tasktracker/internal/update"
 	"github.com/thisisnic/tasktracker/internal/version"
@@ -415,6 +418,61 @@ func TestGoaltrackerPathFromConfig(t *testing.T) {
 	r.run("", false, "project", "add", "house", "--goal", "3")
 	if out := r.run("", false, "--config", cfgPath, "project", "show", "1"); !strings.Contains(out, "#3 run 500 km") {
 		t.Errorf("config path not used:\n%s", out)
+	}
+}
+
+func TestAfterQuit(t *testing.T) {
+	r := newRunner(t)
+	root := t.TempDir()
+	keyFile := filepath.Join(root, "key.txt")
+	out := r.run("", false, "key", "new", "--out", keyFile)
+	var recipient string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "public key: ") {
+			recipient = strings.TrimPrefix(line, "public key: ")
+		}
+	}
+	store, err := task.Open(r.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.AddProject(context.Background(), task.NewProject{Name: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	run := func(cfg config.Config, cfgErr error) (string, error) {
+		cmd := New()
+		cmd.SetContext(context.Background())
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetErr(&buf)
+		err := afterQuit(cmd, store, r.db, cfg, cfgErr)
+		return buf.String(), err
+	}
+	// A config that could not be read is the error, and nothing is written.
+	if _, err := run(config.Config{}, errors.New("bad toml")); err == nil || !strings.Contains(err.Error(), "no backup on quit: bad toml") {
+		t.Errorf("broken config: %v", err)
+	}
+	// on_quit without a folder or key: nothing to do, no error.
+	if out, err := run(config.Config{Backup: config.Backup{OnQuit: true}}, nil); err != nil || out != "" {
+		t.Errorf("unconfigured on_quit: %q, %v", out, err)
+	}
+	// on_quit off: nothing written even though a backup is configured.
+	dir := filepath.Join(root, "data-repo")
+	b := config.Backup{Dir: dir, Recipient: recipient, IdentityFile: keyFile}
+	if out, err := run(config.Config{Backup: b}, nil); err != nil || out != "" {
+		t.Errorf("on_quit off: %q, %v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "tasktracker.db.age")); !os.IsNotExist(err) {
+		t.Error("backup written with on_quit off")
+	}
+	// on_quit with a configured backup writes one.
+	b.OnQuit = true
+	if out, err := run(config.Config{Backup: b}, nil); err != nil || !strings.Contains(out, "backup: wrote ") {
+		t.Errorf("on_quit: %q, %v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "tasktracker.db.age")); err != nil {
+		t.Error("no backup written on quit")
 	}
 }
 

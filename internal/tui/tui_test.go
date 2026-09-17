@@ -446,6 +446,57 @@ func TestFormValidationAndCancel(t *testing.T) {
 	}
 }
 
+func TestFormStaysOpenWhenSaveFails(t *testing.T) {
+	m, store := setup(t, nil)
+	press(m, "j", "e")
+	// Pull the task out from under the form so the save fails.
+	if err := store.DeleteTask(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	typeText(m, " again")
+	press(m, "enter", "enter", "enter", "enter")
+	if m.mode != modeForm || m.err == nil {
+		t.Fatalf("failed save: mode=%v err=%v", m.mode, m.err)
+	}
+	if tf, ok := m.form.(*taskForm); !ok || tf.title != "paint the hall again" {
+		t.Errorf("typed text lost: %+v", m.form)
+	}
+	if !strings.Contains(plain(m), "error:") {
+		t.Error("error not shown while the form is open")
+	}
+	press(m, "esc")
+	if m.mode != modeBrowse {
+		t.Error("esc did not close the failed form")
+	}
+}
+
+func TestDueViewRowStyling(t *testing.T) {
+	m, _ := setup(t, nil)
+	press(m, "v", "j") // fix the gate selected; paint the hall is overdue and unselected
+	view := m.View().Content
+	lines := strings.Split(view, "\n")
+	var overdue, selected string
+	for _, l := range lines {
+		if strings.Contains(l, "paint the hall") {
+			overdue = l
+		}
+		if strings.Contains(l, "fix the gate") {
+			selected = l
+		}
+	}
+	if overdue == "" || selected == "" {
+		t.Fatalf("rows not found:\n%s", view)
+	}
+	// The selected row is one reverse-video run: no reset before the end.
+	inner := selected[strings.Index(selected, "\x1b[7m")+4:]
+	if i := strings.Index(inner, "\x1b[m"); i < 0 || strings.Contains(inner[:i], "\x1b[") {
+		t.Errorf("selected row is not one highlight run: %q", selected)
+	}
+	if !strings.Contains(overdue, overdueStyle.Render("2026-09-10")) {
+		t.Errorf("overdue date not red: %q", overdue)
+	}
+}
+
 func TestEditTaskViaForm(t *testing.T) {
 	m, store := setup(t, nil)
 	press(m, "j", "e")

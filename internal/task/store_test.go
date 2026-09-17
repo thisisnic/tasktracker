@@ -84,9 +84,14 @@ func TestProjectLifecycle(t *testing.T) {
 		t.Errorf("updated project = %+v", p)
 	}
 	goals := []int64{7}
-	p, err = s.UpdateProject(ctx, p.ID, ProjectEdit{GoalIDs: &goals})
-	if err != nil || !reflect.DeepEqual(p.GoalIDs, []int64{7}) {
-		t.Errorf("goal edit = %+v, %v", p, err)
+	done := Done
+	p, err = s.UpdateProject(ctx, p.ID, ProjectEdit{GoalIDs: &goals, State: &done})
+	if err != nil || !reflect.DeepEqual(p.GoalIDs, []int64{7}) || p.State != Done {
+		t.Errorf("goal and state edit = %+v, %v", p, err)
+	}
+	bad := State("paused")
+	if _, err := s.UpdateProject(ctx, p.ID, ProjectEdit{State: &bad}); err == nil {
+		t.Error("bad state accepted on edit")
 	}
 	blank := ""
 	if _, err := s.UpdateProject(ctx, p.ID, ProjectEdit{Name: &blank}); err == nil {
@@ -149,13 +154,17 @@ func TestTaskLifecycle(t *testing.T) {
 		t.Errorf("missing project = %v", err)
 	}
 
-	title, due := "paint the hallway", ""
-	task, err = s.UpdateTask(ctx, task.ID, TaskEdit{Title: &title, Due: &due, ProjectID: &other.ID})
+	title, due, doing := "paint the hallway", "", Doing
+	task, err = s.UpdateTask(ctx, task.ID, TaskEdit{Title: &title, Due: &due, Status: &doing, ProjectID: &other.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.Title != "paint the hallway" || task.Due != "" || task.ProjectID != other.ID {
+	if task.Title != "paint the hallway" || task.Due != "" || task.Status != Doing || task.ProjectID != other.ID {
 		t.Errorf("updated task = %+v", task)
+	}
+	blocked := Status("blocked")
+	if _, err := s.UpdateTask(ctx, task.ID, TaskEdit{Status: &blocked}); err == nil {
+		t.Error("bad status accepted on edit")
 	}
 	bad := int64(99)
 	if _, err := s.UpdateTask(ctx, task.ID, TaskEdit{ProjectID: &bad}); !errors.Is(err, ErrNotFound) {

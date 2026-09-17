@@ -343,6 +343,7 @@ func (s *Store) ListProjects(ctx context.Context, f ProjectFilter) ([]Project, e
 type ProjectEdit struct {
 	Name        *string
 	Description *string
+	State       *State
 	GoalIDs     *[]int64 // empty slice clears the links
 }
 
@@ -362,6 +363,12 @@ func (s *Store) UpdateProject(ctx context.Context, id int64, e ProjectEdit) (Pro
 	if e.Description != nil {
 		p.Description = strings.TrimSpace(*e.Description)
 	}
+	if e.State != nil {
+		if err := checkState(*e.State); err != nil {
+			return Project{}, err
+		}
+		p.State = *e.State
+	}
 	if e.GoalIDs != nil {
 		p.GoalIDs, err = NormaliseGoalIDs(*e.GoalIDs)
 		if err != nil {
@@ -369,7 +376,7 @@ func (s *Store) UpdateProject(ctx context.Context, id int64, e ProjectEdit) (Pro
 		}
 	}
 	err = s.tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `UPDATE projects SET name = ?, description = ? WHERE id = ?`, p.Name, p.Description, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE projects SET name = ?, description = ?, state = ? WHERE id = ?`, p.Name, p.Description, string(p.State), id); err != nil {
 			return err
 		}
 		if e.GoalIDs != nil {
@@ -383,12 +390,26 @@ func (s *Store) UpdateProject(ctx context.Context, id int64, e ProjectEdit) (Pro
 	return s.GetProject(ctx, id)
 }
 
-// MarkProject sets a project's state.
-func (s *Store) MarkProject(ctx context.Context, id int64, st State) error {
+func checkState(st State) error {
 	switch st {
 	case Active, Done, Shelved:
-	default:
-		return fmt.Errorf("state %q: want active, done or shelved", st)
+		return nil
+	}
+	return fmt.Errorf("state %q: want active, done or shelved", st)
+}
+
+func checkStatus(st Status) error {
+	switch st {
+	case Todo, Doing, Finished, Dropped:
+		return nil
+	}
+	return fmt.Errorf("status %q: want todo, doing, done or dropped", st)
+}
+
+// MarkProject sets a project's state.
+func (s *Store) MarkProject(ctx context.Context, id int64, st State) error {
+	if err := checkState(st); err != nil {
+		return err
 	}
 	res, err := s.db.ExecContext(ctx, `UPDATE projects SET state = ? WHERE id = ?`, string(st), id)
 	if err != nil {
@@ -525,7 +546,8 @@ func (s *Store) ListTasks(ctx context.Context, f TaskFilter) ([]Task, error) {
 type TaskEdit struct {
 	Title     *string
 	Due       *string // empty clears it
-	ProjectID *int64  // move the task to another project
+	Status    *Status
+	ProjectID *int64 // move the task to another project
 }
 
 // UpdateTask applies a TaskEdit.
@@ -547,13 +569,19 @@ func (s *Store) UpdateTask(ctx context.Context, id int64, e TaskEdit) (Task, err
 			return Task{}, err
 		}
 	}
+	if e.Status != nil {
+		if err := checkStatus(*e.Status); err != nil {
+			return Task{}, err
+		}
+		t.Status = *e.Status
+	}
 	if e.ProjectID != nil {
 		if _, err := s.GetProject(ctx, *e.ProjectID); err != nil {
 			return Task{}, fmt.Errorf("project %d: %w", *e.ProjectID, err)
 		}
 		t.ProjectID = *e.ProjectID
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET title = ?, due = ?, project_id = ? WHERE id = ?`, t.Title, t.Due, t.ProjectID, id); err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET title = ?, due = ?, status = ?, project_id = ? WHERE id = ?`, t.Title, t.Due, string(t.Status), t.ProjectID, id); err != nil {
 		return Task{}, err
 	}
 	return s.GetTask(ctx, id)
@@ -561,10 +589,8 @@ func (s *Store) UpdateTask(ctx context.Context, id int64, e TaskEdit) (Task, err
 
 // MarkTask sets a task's status.
 func (s *Store) MarkTask(ctx context.Context, id int64, st Status) error {
-	switch st {
-	case Todo, Doing, Finished, Dropped:
-	default:
-		return fmt.Errorf("status %q: want todo, doing, done or dropped", st)
+	if err := checkStatus(st); err != nil {
+		return err
 	}
 	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status = ? WHERE id = ?`, string(st), id)
 	if err != nil {

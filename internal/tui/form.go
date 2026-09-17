@@ -41,6 +41,13 @@ func (f *huhForm) Update(msg tea.Msg) (done bool, submitted bool, cmd tea.Cmd) {
 	return false, false, cmd
 }
 
+// retry puts a completed form back to work with its field values, which
+// live in the owning form's variables, untouched.
+func (f *huhForm) retry() tea.Cmd {
+	f.form.State = huh.StateNormal
+	return f.form.Init()
+}
+
 // resize fits the form to the space the TUI gives it.
 func (f *huhForm) resize(width, height int) {
 	f.width, f.height = max(20, width), max(10, height)
@@ -190,16 +197,8 @@ func (f *projectForm) apply(m *model) (target, error) {
 		p, err := m.store.AddProject(m.ctx, task.NewProject{Name: f.name, Description: f.description, GoalIDs: goals})
 		return target{rowProject, p.ID}, err
 	}
-	p, err := m.store.UpdateProject(m.ctx, f.editID, task.ProjectEdit{Name: &f.name, Description: &f.description, GoalIDs: &goals})
-	if err != nil {
-		return target{}, err
-	}
-	if p.State != f.state {
-		if err := m.store.MarkProject(m.ctx, p.ID, f.state); err != nil {
-			return target{}, err
-		}
-	}
-	return target{rowProject, p.ID}, nil
+	p, err := m.store.UpdateProject(m.ctx, f.editID, task.ProjectEdit{Name: &f.name, Description: &f.description, State: &f.state, GoalIDs: &goals})
+	return target{rowProject, p.ID}, err
 }
 
 // ---- task ----
@@ -274,16 +273,8 @@ func (f *taskForm) apply(m *model) (target, error) {
 		t, err := m.store.AddTask(m.ctx, task.NewTask{ProjectID: f.project, Title: f.title, Due: due})
 		return target{rowTask, t.ID}, err
 	}
-	t, err := m.store.UpdateTask(m.ctx, f.editID, task.TaskEdit{Title: &f.title, Due: &due, ProjectID: &f.project})
-	if err != nil {
-		return target{}, err
-	}
-	if t.Status != f.status {
-		if err := m.store.MarkTask(m.ctx, t.ID, f.status); err != nil {
-			return target{}, err
-		}
-	}
-	return target{rowTask, t.ID}, nil
+	t, err := m.store.UpdateTask(m.ctx, f.editID, task.TaskEdit{Title: &f.title, Due: &due, Status: &f.status, ProjectID: &f.project})
+	return target{rowTask, t.ID}, err
 }
 
 // ---- subtask ----

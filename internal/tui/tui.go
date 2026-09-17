@@ -89,6 +89,9 @@ type editor interface {
 	filtering() bool
 	resize(width, height int)
 	help() string
+	// retry reopens a completed form with its values kept, after apply
+	// failed.
+	retry() tea.Cmd
 }
 
 type model struct {
@@ -297,11 +300,15 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	t, err := m.form.apply(m)
-	m.form = nil
 	if err != nil {
+		// Keep the form, and what was typed, so the user can fix it or
+		// cancel with esc. The form is complete, so a fresh copy of it is
+		// needed to take input again.
 		m.err = err
-		return m, nil
+		m.mode = modeForm
+		return m, m.form.retry()
 	}
+	m.form = nil
 	// A project's goal links may have changed; look them up afresh.
 	delete(m.goalLabels, t.id)
 	if err := m.reload(); err != nil {
@@ -432,8 +439,8 @@ func (m *model) advance() {
 			return
 		}
 		m.status = fmt.Sprintf("task #%d %s", r.task.Task.ID, next)
-		if next == task.Finished && !m.showAll {
-			m.status += " (hidden; f shows finished)"
+		if next == task.Finished {
+			m.status += m.hiddenHint()
 		}
 	case rowProject:
 		next := nextState(r.project.Project.State)
@@ -442,8 +449,8 @@ func (m *model) advance() {
 			return
 		}
 		m.status = fmt.Sprintf("project #%d %s", r.project.Project.ID, next)
-		if next != task.Active && !m.showAll {
-			m.status += " (hidden; f shows finished)"
+		if next != task.Active {
+			m.status += m.hiddenHint()
 		}
 	}
 	m.err = m.reload()
@@ -492,10 +499,20 @@ func (m *model) drop() {
 		m.status = "subtasks are ticked with space, or deleted with d"
 		return
 	}
-	if !m.showAll {
-		m.status += " (hidden; f shows finished)"
-	}
+	m.status += m.hiddenHint()
 	m.err = m.reload()
+}
+
+// hiddenHint explains where a finished item went. The due view only ever
+// lists open tasks, so there f would not bring it back.
+func (m *model) hiddenHint() string {
+	switch {
+	case m.view == viewDue:
+		return " (gone from the due list)"
+	case !m.showAll:
+		return " (hidden; f shows finished)"
+	}
+	return ""
 }
 
 func (m *model) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -618,12 +635,12 @@ func statusGlyph(s task.Status) string {
 	return "○"
 }
 
-// viewRow renders one row as a line of width w. Finished things are
-// dimmed as a whole; an overdue date is red.
+// viewRow renders one row as a line of width w. The row is built as plain
+// text first so width and truncation are measured without escape codes,
+// then styled: finished things are dimmed as a whole, an overdue date is
+// red, and in the due view the project name is dimmed after the title.
 func (m *model) viewRow(r row, selected bool, w int) string {
-	// Build the row as plain text first so width and truncation are
-	// measured without escape codes, then style it.
-	var left, right string
+	var left, right, suffix string
 	finished := false
 	switch r.kind {
 	case rowProject:
@@ -641,11 +658,9 @@ func (m *model) viewRow(r row, selected bool, w int) string {
 		indent := "  "
 		if m.view == viewDue {
 			indent = ""
+			suffix = "  " + r.project.Project.Name
 		}
 		left = fmt.Sprintf("%s%s %s", indent, statusGlyph(t.Status), t.Title)
-		if m.view == viewDue {
-			left += dimStyle.Render("  " + r.project.Project.Name)
-		}
 		if n := len(r.task.Subtasks); n > 0 {
 			right = fmt.Sprintf("%d/%d  ", r.task.Ticked(), n)
 		}
@@ -658,7 +673,7 @@ func (m *model) viewRow(r row, selected bool, w int) string {
 		}
 		left = fmt.Sprintf("    %s %s", box, r.subtask.Title)
 	}
-	line := fit(left, right, w)
+	line := fit(left+suffix, right, w)
 	switch {
 	case selected:
 		return selectedStyle.Render(line)
@@ -666,12 +681,23 @@ func (m *model) viewRow(r row, selected bool, w int) string {
 		return dimStyle.Render(line)
 	case r.kind == rowProject:
 		return projectStyle.Render(line)
-	case r.kind == rowTask && r.task.Task.Overdue(m.now()):
-		return strings.Replace(line, r.task.Task.Due, overdueStyle.Render(r.task.Task.Due), 1)
-	case r.kind == rowTask && r.task.Task.Status == task.Doing:
-		return strings.Replace(line, "◐", doingStyle.Render("◐"), 1)
 	}
-	return line
+	// Style parts of the line by position, never by searching for text
+	// that a title could also contain.
+	head, tail := line[:len(line)-len(right)], line[len(line)-len(right):]
+	if suffix != "" && strings.HasPrefix(head, left+suffix) {
+		head = left + dimStyle.Render(suffix) + head[len(left)+len(suffix):]
+	}
+	if r.kind == rowTask {
+		t := r.task.Task
+		if t.Overdue(m.now()) && strings.HasSuffix(tail, t.Due) {
+			tail = tail[:len(tail)-len(t.Due)] + overdueStyle.Render(t.Due)
+		}
+		if t.Status == task.Doing {
+			head = strings.Replace(head, "◐", doingStyle.Render("◐"), 1)
+		}
+	}
+	return head + tail
 }
 
 // fit pads or truncates left so that right sits flush at width w. Both the
