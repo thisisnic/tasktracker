@@ -32,7 +32,8 @@ const Repo = "thisisnic/tasktracker"
 var APIBase = "https://api.github.com"
 
 // maxDownload bounds how much is read from the network for one asset.
-const maxDownload = 200 << 20
+// It is a variable so tests can lower it.
+var maxDownload int64 = 200 << 20
 
 // Result says what Update did.
 type Result struct {

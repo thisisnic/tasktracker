@@ -106,10 +106,10 @@ func dayOf(t time.Time) time.Time {
 	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
 
-// ParseDue normalises a due date. Empty means no due date. Accepted forms:
-// "2026-09-30", and the shorthands "today" and "tomorrow".
-func ParseDue(s string, today time.Time) (string, error) {
-	s = strings.ToLower(strings.TrimSpace(s))
+// ParseDue normalises a due date. Empty or "none" means no due date.
+// Accepted forms: "2026-09-30", and the shorthands "today" and "tomorrow".
+func ParseDue(raw string, today time.Time) (string, error) {
+	s := strings.ToLower(strings.TrimSpace(raw))
 	switch s {
 	case "", "none":
 		return "", nil
@@ -120,7 +120,7 @@ func ParseDue(s string, today time.Time) (string, error) {
 	}
 	d, err := time.Parse(dueLayout, s)
 	if err != nil {
-		return "", fmt.Errorf("due %q: want YYYY-MM-DD, today or tomorrow", s)
+		return "", fmt.Errorf("due %q: want YYYY-MM-DD, today, tomorrow or none", raw)
 	}
 	return d.Format(dueLayout), nil
 }

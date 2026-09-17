@@ -285,3 +285,15 @@ func TestChecksumFor(t *testing.T) {
 		t.Error("missing entry accepted")
 	}
 }
+
+func TestReadCappedFailsOverLimit(t *testing.T) {
+	old := maxDownload
+	maxDownload = 8
+	t.Cleanup(func() { maxDownload = old })
+	if got, err := readCapped(strings.NewReader("12345678"), "x"); err != nil || string(got) != "12345678" {
+		t.Errorf("exactly at the limit: %q, %v", got, err)
+	}
+	if _, err := readCapped(strings.NewReader("123456789"), "x"); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("over the limit: err = %v, want an error", err)
+	}
+}
