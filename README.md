@@ -203,6 +203,11 @@ tasktracker update            # install it
 Due dates are `YYYY-MM-DD`, `today` or `tomorrow`. Every command also takes
 `--db` and `--config` to point at a different database or config file.
 
+`task list --json` prints the tree as one object with two lists, `areas`
+and `projects`, both present even when empty. Each area carries its own
+`areas` and `projects`; each project its `tasks`, and each task its
+`subtasks`. Every other list command prints a plain array.
+
 ## Development
 
 ```bash

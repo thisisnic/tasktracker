@@ -34,7 +34,8 @@ func areaAddCmd(dbPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "add NAME",
 		Short:   "Add an area, at the top level or inside another",
-		Example: `  tasktracker area add "arrow"\n  tasktracker area add "stf" --in 1`,
+		Example: `  tasktracker area add "arrow"
+  tasktracker area add "stf" --in 1`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, err := openStore(dbPath)
