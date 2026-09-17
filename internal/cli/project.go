@@ -35,10 +35,11 @@ func projectAddCmd(dbPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add NAME",
 		Short: "Add a project",
-		Long: `Add a project. Give --goal once per goaltracker goal the project serves;
-the ids are goaltracker's own.`,
-		Example: `  tasktracker project add "house" --description "fix it up" --goal 3 --goal 7`,
-		Args:    cobra.ExactArgs(1),
+		Long: `Add a project. --in puts it in an area. Give --goal once per goaltracker
+goal the project serves; the ids are goaltracker's own.`,
+		Example: `  tasktracker project add "house" --description "fix it up" --goal 3 --goal 7
+  tasktracker project add "grant report" --in 2`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, err := openStore(dbPath)
 			if err != nil {
@@ -58,6 +59,7 @@ the ids are goaltracker's own.`,
 		},
 	}
 	cmd.Flags().StringVar(&in.Description, "description", "", "what the project is")
+	cmd.Flags().Int64Var(&in.AreaID, "in", 0, "id of the area the project goes in")
 	cmd.Flags().Int64SliceVar(&in.GoalIDs, "goal", nil, "goaltracker goal id this project serves (repeatable)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print the project as JSON")
 	return cmd
@@ -103,10 +105,14 @@ func projectListCmd(dbPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			areas, err := store.ListAreas(cmd.Context())
+			if err != nil {
+				return err
+			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tPROJECT\tSTATE\tOPEN\tGOALS")
+			fmt.Fprintln(tw, "ID\tPROJECT\tAREA\tSTATE\tOPEN\tGOALS")
 			for _, p := range projects {
-				fmt.Fprintf(tw, "%d\t%s\t%s\t%d\t%s\n", p.ID, p.Name, p.State, open[p.ID], goalIDsText(p.GoalIDs))
+				fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%d\t%s\n", p.ID, p.Name, task.AreaPath(areas, p.AreaID), p.State, open[p.ID], goalIDsText(p.GoalIDs))
 			}
 			return tw.Flush()
 		},
@@ -140,6 +146,7 @@ func goalIDsText(ids []int64) string {
 
 type projectDetail struct {
 	task.Project
+	Area  string          `json:"area,omitempty"` // the area's path, such as "arrow / stf"
 	Goals []goallink.Goal `json:"goals"`
 	Tasks []task.Task     `json:"tasks"`
 }
@@ -168,6 +175,14 @@ func projectShowCmd(dbPath, cfgPath *string) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			var area string
+			if p.AreaID != 0 {
+				areas, err := store.ListAreas(cmd.Context())
+				if err != nil {
+					return err
+				}
+				area = task.AreaPath(areas, p.AreaID)
+			}
 			// Goal statements are a nicety: without goaltracker's database
 			// the ids are shown bare and the reason goes to stderr.
 			goals, goalErr := goalReader(cmd, *cfgPath).Lookup(cmd.Context(), p.GoalIDs)
@@ -178,10 +193,13 @@ func projectShowCmd(dbPath, cfgPath *string) *cobra.Command {
 				if tasks == nil {
 					tasks = []task.Task{}
 				}
-				return writeJSON(cmd.OutOrStdout(), projectDetail{Project: p, Goals: goals, Tasks: tasks})
+				return writeJSON(cmd.OutOrStdout(), projectDetail{Project: p, Area: area, Goals: goals, Tasks: tasks})
 			}
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "#%d  %s\n", p.ID, p.Name)
+			if area != "" {
+				fmt.Fprintf(out, "area:   %s\n", area)
+			}
 			fmt.Fprintf(out, "state:  %s\n", p.State)
 			if p.Description != "" {
 				fmt.Fprintf(out, "about:  %s\n", p.Description)
@@ -209,13 +227,16 @@ func projectShowCmd(dbPath, cfgPath *string) *cobra.Command {
 
 func projectEditCmd(dbPath *string) *cobra.Command {
 	var name, description string
+	var in int64
+	var top bool
 	var goals []int64
 	var noGoals bool
 	cmd := &cobra.Command{
 		Use:   "edit ID",
-		Short: "Change a project's name, description or goals",
-		Long: `Change a project. --goal replaces the whole set of goal links, so give it
-once per goal to keep; --no-goals removes them all.`,
+		Short: "Change a project's name, description, area or goals",
+		Long: `Change a project. --in moves it into an area and --top out of any area.
+--goal replaces the whole set of goal links, so give it once per goal to
+keep; --no-goals removes them all.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := parseID("project", args[0])
@@ -230,6 +251,15 @@ once per goal to keep; --no-goals removes them all.`,
 				e.Description = &description
 			}
 			switch {
+			case top && cmd.Flags().Changed("in"):
+				return errors.New("--in and --top cannot both be given")
+			case top:
+				none := int64(0)
+				e.AreaID = &none
+			case cmd.Flags().Changed("in"):
+				e.AreaID = &in
+			}
+			switch {
 			case noGoals && cmd.Flags().Changed("goal"):
 				return errors.New("--goal and --no-goals cannot both be given")
 			case noGoals:
@@ -238,7 +268,7 @@ once per goal to keep; --no-goals removes them all.`,
 			case cmd.Flags().Changed("goal"):
 				e.GoalIDs = &goals
 			}
-			if e.Name == nil && e.Description == nil && e.GoalIDs == nil {
+			if e.Name == nil && e.Description == nil && e.AreaID == nil && e.GoalIDs == nil {
 				return errors.New("nothing to change; give at least one flag")
 			}
 			store, err := openStore(dbPath)
@@ -256,6 +286,8 @@ once per goal to keep; --no-goals removes them all.`,
 	}
 	cmd.Flags().StringVar(&name, "name", "", "new name")
 	cmd.Flags().StringVar(&description, "description", "", "new description; empty clears it")
+	cmd.Flags().Int64Var(&in, "in", 0, "id of the area to move the project into")
+	cmd.Flags().BoolVar(&top, "top", false, "move the project out of any area")
 	cmd.Flags().Int64SliceVar(&goals, "goal", nil, "goaltracker goal id to link (repeatable; replaces the set)")
 	cmd.Flags().BoolVar(&noGoals, "no-goals", false, "remove every goal link")
 	return cmd
@@ -324,26 +356,35 @@ func projectDeleteCmd(dbPath *string) *cobra.Command {
 	return cmd
 }
 
-// printTree writes projects, tasks and subtasks as an indented table.
-func printTree(w io.Writer, tree []task.ProjectNode) {
-	if len(tree) == 0 {
+// printTree writes areas, projects, tasks and subtasks as an indented table.
+func printTree(w io.Writer, o task.Outline) {
+	if len(o.Areas) == 0 && len(o.Projects) == 0 {
 		fmt.Fprintln(w, "no projects. add one with: tasktracker project add \"...\"")
 		return
 	}
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tSTATUS\tDUE\tTITLE")
-	for _, p := range tree {
-		fmt.Fprintf(tw, "P%d\t%s\t\t%s\n", p.Project.ID, p.Project.State, p.Project.Name)
-		for _, t := range p.Tasks {
-			fmt.Fprintf(tw, "%d\t%s\t%s\t  %s\n", t.Task.ID, t.Task.Status, t.Task.Due, t.Task.Title)
-			for _, s := range t.Subtasks {
-				box := "[ ]"
-				if s.Done {
-					box = "[x]"
+	var walk func(areas []task.AreaNode, projects []task.ProjectNode, depth int)
+	walk = func(areas []task.AreaNode, projects []task.ProjectNode, depth int) {
+		indent := strings.Repeat("  ", depth)
+		for _, a := range areas {
+			fmt.Fprintf(tw, "A%d\t\t\t%s%s\n", a.Area.ID, indent, a.Area.Name)
+			walk(a.Areas, a.Projects, depth+1)
+		}
+		for _, p := range projects {
+			fmt.Fprintf(tw, "P%d\t%s\t\t%s%s\n", p.Project.ID, p.Project.State, indent, p.Project.Name)
+			for _, t := range p.Tasks {
+				fmt.Fprintf(tw, "%d\t%s\t%s\t%s  %s\n", t.Task.ID, t.Task.Status, t.Task.Due, indent, t.Task.Title)
+				for _, s := range t.Subtasks {
+					box := "[ ]"
+					if s.Done {
+						box = "[x]"
+					}
+					fmt.Fprintf(tw, "S%d\t%s\t\t%s    %s\n", s.ID, box, indent, s.Title)
 				}
-				fmt.Fprintf(tw, "S%d\t%s\t\t    %s\n", s.ID, box, s.Title)
 			}
 		}
 	}
+	walk(o.Areas, o.Projects, 0)
 	tw.Flush()
 }

@@ -86,17 +86,20 @@ and finished projects. --due lists only tasks with a due date, soonest first.
 			defer store.Close()
 			filtered := f.ProjectID != 0 || f.Status != "" || f.Due
 			if !filtered {
-				tree, err := store.Tree(cmd.Context(), all)
+				outline, err := store.Outline(cmd.Context(), all)
 				if err != nil {
 					return err
 				}
 				if asJSON {
-					if tree == nil {
-						tree = []task.ProjectNode{}
+					if outline.Areas == nil {
+						outline.Areas = []task.AreaNode{}
 					}
-					return writeJSON(cmd.OutOrStdout(), tree)
+					if outline.Projects == nil {
+						outline.Projects = []task.ProjectNode{}
+					}
+					return writeJSON(cmd.OutOrStdout(), outline)
 				}
-				printTree(cmd.OutOrStdout(), tree)
+				printTree(cmd.OutOrStdout(), outline)
 				return nil
 			}
 			f.Open = !all && f.Status == ""

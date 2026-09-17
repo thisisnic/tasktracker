@@ -21,11 +21,18 @@ type Store struct {
 }
 
 const schema = `
+CREATE TABLE IF NOT EXISTS areas (
+	id         INTEGER PRIMARY KEY,
+	name       TEXT NOT NULL,
+	parent_id  INTEGER REFERENCES areas(id) ON DELETE SET NULL,
+	created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS projects (
 	id          INTEGER PRIMARY KEY,
 	name        TEXT NOT NULL,
 	description TEXT NOT NULL DEFAULT '',
 	state       TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active','done','shelved')),
+	area_id     INTEGER REFERENCES areas(id) ON DELETE SET NULL,
 	created_at  TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS project_goals (
@@ -110,7 +117,48 @@ func Open(path string, opts ...Option) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
 	return &Store{db: db}, nil
+}
+
+// migrate adds what tables made by earlier versions lack. CREATE TABLE IF
+// NOT EXISTS leaves an existing table as it was, so a column added to the
+// schema later has to be added to old databases here.
+func migrate(db *sql.DB) error {
+	has, err := hasColumn(db, "projects", "area_id")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE projects ADD COLUMN area_id INTEGER REFERENCES areas(id) ON DELETE SET NULL`); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func hasColumn(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var dflt any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // restrict tightens modes left loose by earlier versions. The database and
@@ -189,6 +237,7 @@ func (s *Store) tx(ctx context.Context, fn func(*sql.Tx) error) error {
 type NewProject struct {
 	Name        string
 	Description string
+	AreaID      int64 // 0 for no area
 	GoalIDs     []int64
 }
 
@@ -202,10 +251,13 @@ func (s *Store) AddProject(ctx context.Context, in NewProject) (Project, error) 
 	if err != nil {
 		return Project{}, err
 	}
+	if err := s.checkArea(ctx, in.AreaID); err != nil {
+		return Project{}, err
+	}
 	var id int64
 	err = s.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `INSERT INTO projects (name, description, state, created_at) VALUES (?, ?, ?, ?)`,
-			in.Name, strings.TrimSpace(in.Description), string(Active), now())
+		res, err := tx.ExecContext(ctx, `INSERT INTO projects (name, description, state, area_id, created_at) VALUES (?, ?, ?, ?, ?)`,
+			in.Name, strings.TrimSpace(in.Description), string(Active), nullID(in.AreaID), now())
 		if err != nil {
 			return err
 		}
@@ -220,6 +272,18 @@ func (s *Store) AddProject(ctx context.Context, in NewProject) (Project, error) 
 	return s.GetProject(ctx, id)
 }
 
+// checkArea says whether a project can be put in area id: 0 is no area,
+// anything else must exist.
+func (s *Store) checkArea(ctx context.Context, id int64) error {
+	if id == 0 {
+		return nil
+	}
+	if _, err := s.GetArea(ctx, id); err != nil {
+		return fmt.Errorf("area %d: %w", id, err)
+	}
+	return nil
+}
+
 func setGoals(ctx context.Context, tx *sql.Tx, projectID int64, goals []int64) error {
 	if _, err := tx.ExecContext(ctx, `DELETE FROM project_goals WHERE project_id = ?`, projectID); err != nil {
 		return err
@@ -232,14 +296,16 @@ func setGoals(ctx context.Context, tx *sql.Tx, projectID int64, goals []int64) e
 	return nil
 }
 
-const selectProject = `SELECT id, name, description, state, created_at FROM projects`
+const selectProject = `SELECT id, name, description, state, area_id, created_at FROM projects`
 
 func scanProject(row interface{ Scan(...any) error }) (Project, error) {
 	var p Project
+	var area sql.NullInt64
 	var created string
-	if err := row.Scan(&p.ID, &p.Name, &p.Description, &p.State, &created); err != nil {
+	if err := row.Scan(&p.ID, &p.Name, &p.Description, &p.State, &area, &created); err != nil {
 		return Project{}, err
 	}
+	p.AreaID = area.Int64
 	p.CreatedAt = parseTime(created)
 	return p, nil
 }
@@ -344,6 +410,7 @@ type ProjectEdit struct {
 	Name        *string
 	Description *string
 	State       *State
+	AreaID      *int64   // 0 moves the project out of any area
 	GoalIDs     *[]int64 // empty slice clears the links
 }
 
@@ -369,6 +436,12 @@ func (s *Store) UpdateProject(ctx context.Context, id int64, e ProjectEdit) (Pro
 		}
 		p.State = *e.State
 	}
+	if e.AreaID != nil {
+		if err := s.checkArea(ctx, *e.AreaID); err != nil {
+			return Project{}, err
+		}
+		p.AreaID = *e.AreaID
+	}
 	if e.GoalIDs != nil {
 		p.GoalIDs, err = NormaliseGoalIDs(*e.GoalIDs)
 		if err != nil {
@@ -376,7 +449,7 @@ func (s *Store) UpdateProject(ctx context.Context, id int64, e ProjectEdit) (Pro
 		}
 	}
 	err = s.tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `UPDATE projects SET name = ?, description = ?, state = ? WHERE id = ?`, p.Name, p.Description, string(p.State), id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE projects SET name = ?, description = ?, state = ?, area_id = ? WHERE id = ?`, p.Name, p.Description, string(p.State), nullID(p.AreaID), id); err != nil {
 			return err
 		}
 		if e.GoalIDs != nil {

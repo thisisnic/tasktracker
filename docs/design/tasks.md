@@ -13,11 +13,45 @@ It is a separate binary with its own database, built the same way.
 
 ## Hierarchy
 
-Three levels: **project → task → subtask**.
+Three levels of work: **project → task → subtask**, with **areas** above
+projects for grouping.
 
 - A project holds tasks. A task holds subtasks.
 - Every task belongs to a project, and every subtask to a task. (Whether a
   task can exist with no project was not answered; see Open questions.)
+- A project can sit in an area, and areas nest. See Areas.
+
+## Areas
+
+Added on 2026-09-17, once real work was going in: "I have arrow work, some
+of it is STF work and some is general maintenance. I'd want to have STF
+stuff with 2 sub-levels, and then within those there would be projects."
+
+- "The things above projects are more like tags but i still want some
+  hierarchy." So an area is just a name and, optionally, the area it sits
+  in. No state, no due date, no description.
+- An area holds sub-areas and projects, mixed. A project is in at most one
+  area; a project in none sits at the top level, which is where every
+  project made before areas existed stays.
+- Areas roll up their open task count, and nothing else. They cannot be
+  marked done or shelved; a finished branch is one whose projects are all
+  finished.
+- Deleting an area is like removing a tag: what was in it moves up a
+  level. Nothing in it is deleted.
+- Goal links stay on projects for now (builder's suggestion, to be
+  revisited if STF-style work wants a goal at the area level).
+
+### Zooming
+
+"I don't always need to view the full hierarchy btw as it'll truncate
+stuff on the screen, but i do wanna be able to place things so I can choose
+to view by an area at diff level if I want."
+
+So the tree view can be zoomed to any area: the area's name is shown in the
+title and only what is inside it is listed, indented from that area rather
+than from the top. The due view narrows in the same way. Zooming in on a
+project, task or subtask zooms to the area it is in; zooming out goes up
+one area at a time until the whole tree is shown again.
 
 ## Projects
 
@@ -65,8 +99,9 @@ exists for scripts and coding agents, with `--json`.
 
 Suggested layout, to be adjusted once real tasks are in it:
 
-- A tree pane: projects as headers, their tasks indented under them, and
-  subtasks under tasks with a tick box. A detail pane for the selected item.
+- A tree pane: areas, then projects as headers, their tasks indented under
+  them, and subtasks under tasks with a tick box. A detail pane for the
+  selected item.
 - A due view that lists open tasks with a due date, soonest first, overdue
   ones marked. This is the builder's reading of "maybe what's due etc".
 - Finished things (done or dropped tasks, done or shelved projects) are

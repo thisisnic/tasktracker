@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
@@ -197,6 +198,8 @@ func labels(m *model) []string {
 	var out []string
 	for _, r := range m.rows {
 		switch r.kind {
+		case rowArea:
+			out = append(out, "A:"+r.area.Area.Name)
 		case rowProject:
 			out = append(out, "P:"+r.project.Project.Name)
 		case rowTask:
@@ -683,5 +686,240 @@ func TestDueWords(t *testing.T) {
 		if got := dueWords(days); got != want {
 			t.Errorf("dueWords(%d) = %q want %q", days, got, want)
 		}
+	}
+}
+
+// withAreas puts the setup data into areas: arrow holds stf, which holds
+// house; work sits in arrow itself. Returns the ids of arrow and stf.
+func withAreas(t *testing.T, m *model, store *task.Store) (arrow, stf int64) {
+	t.Helper()
+	ctx := context.Background()
+	a, err := store.AddArea(ctx, task.NewArea{Name: "arrow"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.AddArea(ctx, task.NewArea{Name: "stf", ParentID: a.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateProject(ctx, 1, task.ProjectEdit{AreaID: &s.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateProject(ctx, 2, task.ProjectEdit{AreaID: &a.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.reload(); err != nil {
+		t.Fatal(err)
+	}
+	m.cursor = 0 // reload kept the cursor on house; start from the top
+	return a.ID, s.ID
+}
+
+func TestAreaRows(t *testing.T) {
+	m, store := setup(t, nil)
+	withAreas(t, m, store)
+	want := []string{"A:arrow", "A:stf", "P:house", "T:paint the hall", "S:buy paint", "S:move furniture", "T:fix the gate", "P:work", "T:email accountant"}
+	if got := labels(m); !reflect.DeepEqual(got, want) {
+		t.Fatalf("rows = %v\nwant   %v", got, want)
+	}
+	view := plain(m)
+	for _, want := range []string{"▸ arrow", "  ▸ stf", "    house", "      ○ paint the hall", "        [x] buy paint", "  work", "    ○ email accountant", "3 open", "holds   1 areas, 2 projects", "tasks   3 open"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view missing %q:\n%s", want, view)
+		}
+	}
+	press(m, "j", "j") // house
+	if view := plain(m); !strings.Contains(view, "area  arrow / stf") {
+		t.Errorf("project detail missing its area:\n%s", view)
+	}
+	press(m, "k", "space")
+	if !strings.Contains(m.status, "no state") {
+		t.Errorf("space on an area: %q", m.status)
+	}
+	press(m, "x")
+	if !strings.Contains(m.status, "no state") {
+		t.Errorf("x on an area: %q", m.status)
+	}
+	press(m, "a")
+	if m.mode != modeBrowse || !strings.Contains(m.status, "select a project") {
+		t.Errorf("a on an area: mode=%v status=%q", m.mode, m.status)
+	}
+	press(m, "s")
+	if m.mode != modeBrowse || !strings.Contains(m.status, "select a task") {
+		t.Errorf("s on an area: mode=%v status=%q", m.mode, m.status)
+	}
+}
+
+func TestZoom(t *testing.T) {
+	m, store := setup(t, nil)
+	arrow, stf := withAreas(t, m, store)
+	press(m, "h")
+	if !strings.Contains(m.status, "everything already") {
+		t.Errorf("h at the top: %q", m.status)
+	}
+	press(m, "l") // into arrow
+	if m.scope != arrow || m.cursor != 0 {
+		t.Fatalf("after l: scope=%d cursor=%d", m.scope, m.cursor)
+	}
+	want := []string{"A:stf", "P:house", "T:paint the hall", "S:buy paint", "S:move furniture", "T:fix the gate", "P:work", "T:email accountant"}
+	if got := labels(m); !reflect.DeepEqual(got, want) {
+		t.Errorf("rows inside arrow = %v", got)
+	}
+	view := plain(m)
+	if !strings.Contains(view, "tasktracker · tree · arrow") || !strings.Contains(view, "│ ▸ stf") || !strings.Contains(view, "│   house") {
+		t.Errorf("zoomed view:\n%s", view)
+	}
+	press(m, "j", "j", "l") // on paint the hall: into its project's area, stf
+	if m.scope != stf {
+		t.Fatalf("l on a task: scope=%d", m.scope)
+	}
+	if got := labels(m); got[0] != "P:house" || len(got) != 5 {
+		t.Errorf("rows inside stf = %v", got)
+	}
+	press(m, "l")
+	if !strings.Contains(m.status, "already inside arrow / stf") {
+		t.Errorf("l inside the same area: %q", m.status)
+	}
+	// The due view narrows the same way.
+	press(m, "v")
+	if got := labels(m); !reflect.DeepEqual(got, []string{"T:paint the hall", "T:fix the gate"}) {
+		t.Errorf("due rows inside stf = %v", got)
+	}
+	if !strings.Contains(plain(m), "tasktracker · due · arrow / stf") {
+		t.Error("due title missing the area")
+	}
+	press(m, "v", "h") // back to the tree, out to arrow, cursor on stf
+	if m.scope != arrow {
+		t.Fatalf("after h: scope=%d", m.scope)
+	}
+	if r, _ := m.selected(); r.target() != (target{rowArea, stf}) {
+		t.Errorf("cursor after zooming out: %v", r.target())
+	}
+	press(m, "h")
+	if m.scope != 0 || m.status != "showing everything" {
+		t.Errorf("after second h: scope=%d status=%q", m.scope, m.status)
+	}
+	if r, _ := m.selected(); r.target() != (target{rowArea, arrow}) {
+		t.Errorf("cursor after zooming out to the top: %v", r.target())
+	}
+	press(m, "G", "l") // email accountant is in arrow
+	if m.scope != arrow {
+		t.Errorf("l on a project in arrow: scope=%d", m.scope)
+	}
+
+	// The zoomed area vanishing from outside drops back to everything.
+	if err := store.DeleteArea(context.Background(), arrow); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "r")
+	if m.scope != 0 || m.err != nil {
+		t.Errorf("after the area went: scope=%d err=%v", m.scope, m.err)
+	}
+	if got := labels(m); got[0] != "A:stf" {
+		t.Errorf("rows after the area went: %v", got)
+	}
+}
+
+func TestAreaForms(t *testing.T) {
+	m, store := setup(t, nil)
+	ctx := context.Background()
+	arrow, stf := withAreas(t, m, store)
+	press(m, "j", "n") // on stf: a new area inside it
+	af, ok := m.form.(*areaForm)
+	if !ok || af.parent != stf {
+		t.Fatalf("form = %T parent=%d", m.form, af.parent)
+	}
+	typeText(m, "grant")
+	press(m, "enter", "enter") // name -> inside (stf kept) -> submit
+	if m.mode != modeBrowse || m.err != nil {
+		t.Fatalf("area form: mode=%v err=%v", m.mode, m.err)
+	}
+	areas, _ := store.ListAreas(ctx)
+	grant := areas[len(areas)-1]
+	if grant.Name != "grant" || grant.ParentID != stf {
+		t.Errorf("saved area: %+v", grant)
+	}
+	if r, _ := m.selected(); r.target() != (target{rowArea, grant.ID}) {
+		t.Errorf("cursor: %v", r.target())
+	}
+	if got := labels(m); got[2] != "A:grant" {
+		t.Errorf("rows: %v", got)
+	}
+
+	// Editing stf cannot offer stf or grant as a home; move it to the top.
+	press(m, "k", "e")
+	af, ok = m.form.(*areaForm)
+	if !ok || af.editID != stf || af.name != "stf" {
+		t.Fatalf("edit form = %T %+v", m.form, af)
+	}
+	typeText(m, " work")
+	press(m, "enter") // name -> inside
+	if _, ok := af.form.GetFocusedField().(*huh.Select[int64]); !ok {
+		t.Fatalf("second field = %T", af.form.GetFocusedField())
+	}
+	// The list is (top level) and arrow only: stf and grant are left out.
+	// The select starts on arrow and wraps, so j reaches the top; were
+	// stf offered, j would land on it instead.
+	press(m, "j", "enter")
+	if m.mode != modeBrowse || m.err != nil {
+		t.Fatalf("edit form: mode=%v err=%v", m.mode, m.err)
+	}
+	a, _ := store.GetArea(ctx, stf)
+	if a.Name != "stf work" || a.ParentID != 0 {
+		t.Errorf("edited area: %+v", a)
+	}
+	if got := labels(m); got[0] != "A:arrow" || got[1] != "P:work" || got[3] != "A:stf work" {
+		t.Errorf("rows after the move: %v", got)
+	}
+
+	// A new project from an area row lands in that area.
+	press(m, "g", "A")
+	pf, ok := m.form.(*projectForm)
+	if !ok || pf.area != arrow {
+		t.Fatalf("project form = %T area=%d", m.form, pf.area)
+	}
+	typeText(m, "docs")
+	press(m, "enter", "enter", "enter", "enter") // name, about, area, goals -> submit
+	if m.mode != modeBrowse || m.err != nil {
+		t.Fatalf("project form: mode=%v err=%v", m.mode, m.err)
+	}
+	projects, _ := store.ListProjects(ctx, task.ProjectFilter{})
+	p := projects[len(projects)-1]
+	if p.Name != "docs" || p.AreaID != arrow {
+		t.Errorf("saved project: %+v", p)
+	}
+	// Editing it and picking (none) moves it out.
+	press(m, "e")
+	press(m, "enter", "enter") // name, about
+	press(m, "g", "enter")     // area: (none)
+	press(m, "enter", "enter") // state, goals
+	if m.mode != modeBrowse || m.err != nil {
+		t.Fatalf("project edit: mode=%v err=%v", m.mode, m.err)
+	}
+	if p, _ = store.GetProject(ctx, p.ID); p.AreaID != 0 {
+		t.Errorf("project after picking (none): %+v", p)
+	}
+}
+
+func TestDeleteArea(t *testing.T) {
+	m, store := setup(t, nil)
+	ctx := context.Background()
+	arrow, stf := withAreas(t, m, store)
+	press(m, "j", "d")
+	if m.mode != modeConfirmDelete || !strings.Contains(plain(m), `delete area #2 "stf" and move what is in it up a level?`) {
+		t.Fatalf("d on an area: mode=%v\n%s", m.mode, plain(m))
+	}
+	press(m, "y")
+	if m.err != nil || m.status != "deleted area #2" {
+		t.Errorf("after delete: err=%v status=%q", m.err, m.status)
+	}
+	if _, err := store.GetArea(ctx, stf); err == nil {
+		t.Error("area still there")
+	}
+	if p, _ := store.GetProject(ctx, 1); p.AreaID != arrow {
+		t.Errorf("house after the delete: area %d", p.AreaID)
+	}
+	if got := labels(m); !reflect.DeepEqual(got[:2], []string{"A:arrow", "P:house"}) {
+		t.Errorf("rows after the delete: %v", got)
 	}
 }

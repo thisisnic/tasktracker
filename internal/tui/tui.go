@@ -1,8 +1,9 @@
 // Package tui is the terminal UI for tasktracker, built on Bubble Tea v2.
 //
-// The left pane is a tree of projects, tasks and subtasks, or a flat list
-// of tasks with due dates. The right pane shows the selected item. Forms
-// for adding and editing take over both panes.
+// The left pane is a tree of areas, projects, tasks and subtasks, or a flat
+// list of tasks with due dates. Either can be zoomed to one area. The right
+// pane shows the selected item. Forms for adding and editing take over both
+// panes.
 package tui
 
 import (
@@ -59,15 +60,20 @@ const (
 type rowKind int
 
 const (
-	rowProject rowKind = iota
+	rowArea rowKind = iota
+	rowProject
 	rowTask
 	rowSubtask
 )
 
-// row is one selectable line in the left pane. Project is always set: the
-// project the row belongs to. Task is set for task and subtask rows.
+// row is one selectable line in the left pane. Area is set for area rows.
+// Project is set for every other row: the project the row belongs to. Task
+// is set for task and subtask rows. Depth is how many areas the row is
+// inside, counted from the zoomed area, and sets its indent.
 type row struct {
 	kind    rowKind
+	depth   int
+	area    task.AreaNode
 	project task.ProjectNode
 	task    task.TaskNode
 	subtask task.Subtask
@@ -100,13 +106,15 @@ type model struct {
 	goals *goallink.Reader
 	now   func() time.Time
 
-	tree    []task.ProjectNode
+	outline task.Outline
+	areas   []task.Area // every area, flat, for paths and pick lists
 	rows    []row
 	cursor  int
 	width   int
 	height  int
 	showAll bool     // show finished tasks and projects
 	view    viewKind // tree or due
+	scope   int64    // the area the view is zoomed to; 0 for everything
 
 	// goal labels for the selected project, looked up once per project id
 	goalLabels map[int64][]goallink.Goal
@@ -130,11 +138,19 @@ func (m *model) reload() error {
 		t := r.target()
 		keep = &t
 	}
-	tree, err := m.store.Tree(m.ctx, m.showAll)
+	outline, err := m.store.Outline(m.ctx, m.showAll)
 	if err != nil {
 		return err
 	}
-	m.tree = tree
+	areas, err := m.store.ListAreas(m.ctx)
+	if err != nil {
+		return err
+	}
+	m.outline, m.areas = outline, areas
+	if _, ok := m.outline.Find(m.scope); m.scope != 0 && !ok {
+		// The zoomed area is gone, deleted from outside; show everything.
+		m.scope = 0
+	}
 	m.rebuildRows()
 	if keep != nil {
 		m.selectTarget(*keep)
@@ -145,31 +161,45 @@ func (m *model) reload() error {
 	return nil
 }
 
-// rebuildRows flattens the tree for the current view. The due view lists
-// open tasks with a due date, soonest first, with no project rows.
+// rebuildRows flattens the tree for the current view, starting from the
+// zoomed area when there is one. The tree view lists an area's areas, then
+// its projects, each indented one step deeper. The due view lists open
+// tasks with a due date, soonest first, with no area or project rows.
 func (m *model) rebuildRows() {
 	m.rows = m.rows[:0]
-	if m.view == viewDue {
-		var due []row
-		for _, p := range m.tree {
+	areas, projects := m.outline.Areas, m.outline.Projects
+	if n, ok := m.outline.Find(m.scope); ok {
+		areas, projects = n.Areas, n.Projects
+	}
+	var walk func(areas []task.AreaNode, projects []task.ProjectNode, depth int)
+	walk = func(areas []task.AreaNode, projects []task.ProjectNode, depth int) {
+		for _, a := range areas {
+			if m.view == viewTree {
+				m.rows = append(m.rows, row{kind: rowArea, depth: depth, area: a})
+			}
+			walk(a.Areas, a.Projects, depth+1)
+		}
+		for _, p := range projects {
+			if m.view == viewTree {
+				m.rows = append(m.rows, row{kind: rowProject, depth: depth, project: p})
+			}
 			for _, t := range p.Tasks {
-				if t.Task.Due != "" && t.Task.Open() {
-					due = append(due, row{kind: rowTask, project: p, task: t})
+				if m.view == viewDue {
+					if t.Task.Due != "" && t.Task.Open() {
+						m.rows = append(m.rows, row{kind: rowTask, project: p, task: t})
+					}
+					continue
+				}
+				m.rows = append(m.rows, row{kind: rowTask, depth: depth, project: p, task: t})
+				for _, s := range t.Subtasks {
+					m.rows = append(m.rows, row{kind: rowSubtask, depth: depth, project: p, task: t, subtask: s})
 				}
 			}
 		}
-		sortRowsByDue(due)
-		m.rows = due
-		return
 	}
-	for _, p := range m.tree {
-		m.rows = append(m.rows, row{kind: rowProject, project: p})
-		for _, t := range p.Tasks {
-			m.rows = append(m.rows, row{kind: rowTask, project: p, task: t})
-			for _, s := range t.Subtasks {
-				m.rows = append(m.rows, row{kind: rowSubtask, project: p, task: t, subtask: s})
-			}
-		}
+	walk(areas, projects, 0)
+	if m.view == viewDue {
+		sortRowsByDue(m.rows)
 	}
 }
 
@@ -184,6 +214,8 @@ func sortRowsByDue(rows []row) {
 
 func (r row) target() target {
 	switch r.kind {
+	case rowArea:
+		return target{rowArea, r.area.Area.ID}
 	case rowTask:
 		return target{rowTask, r.task.Task.ID}
 	case rowSubtask:
@@ -191,6 +223,18 @@ func (r row) target() target {
 	}
 	return target{rowProject, r.project.Project.ID}
 }
+
+// areaOf is the area a row is in: the area itself for an area row, and
+// the project's area for the rest.
+func (r row) areaOf() int64 {
+	if r.kind == rowArea {
+		return r.area.Area.ID
+	}
+	return r.project.Project.AreaID
+}
+
+// areaPath names an area by its ancestry, or "" for none.
+func (m *model) areaPath(id int64) string { return task.AreaPath(m.areas, id) }
 
 // selectTarget moves the cursor to the row for t. When t is gone, for
 // instance because it was just hidden, the cursor stays where it is.
@@ -322,6 +366,8 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (t target) label() string {
 	switch t.kind {
+	case rowArea:
+		return fmt.Sprintf("area #%d", t.id)
 	case rowTask:
 		return fmt.Sprintf("task #%d", t.id)
 	case rowSubtask:
@@ -369,6 +415,10 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.status = "tree"
 		}
 		m.err = m.reload()
+	case "l", "right":
+		m.zoomIn()
+	case "h", "left":
+		m.zoomOut()
 	case "space", " ", "enter":
 		m.advance()
 	case "x":
@@ -377,18 +427,24 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if _, ok := m.selected(); ok {
 			m.mode = modeConfirmDelete
 		}
+	case "n":
+		return m, m.openEditor(newAreaForm(nil, m.areaHere(), m.areas, nil, 0, 0))
 	case "A":
-		return m, m.openEditor(newProjectForm(nil, m.goalOptions(), 0, 0))
+		return m, m.openEditor(newProjectForm(nil, m.areaHere(), m.areas, m.goalOptions(), 0, 0))
 	case "a":
 		r, ok := m.selected()
 		if !ok {
 			m.status = "add a project first: press A"
 			return m, nil
 		}
+		if r.kind == rowArea {
+			m.status = "select a project to add a task under; A adds one here"
+			return m, nil
+		}
 		return m, m.openEditor(newTaskForm(nil, r.project.Project.ID, m.projectOptions(), m.now(), 0, 0))
 	case "s":
 		r, ok := m.selected()
-		if !ok || r.kind == rowProject {
+		if !ok || r.kind == rowArea || r.kind == rowProject {
 			m.status = "select a task to add a subtask under"
 			return m, nil
 		}
@@ -399,9 +455,12 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch r.kind {
+		case rowArea:
+			a := r.area.Area
+			return m, m.openEditor(newAreaForm(&a, a.ParentID, m.areas, inside(r.area), 0, 0))
 		case rowProject:
 			p := r.project.Project
-			return m, m.openEditor(newProjectForm(&p, m.goalOptions(), 0, 0))
+			return m, m.openEditor(newProjectForm(&p, p.AreaID, m.areas, m.goalOptions(), 0, 0))
 		case rowTask:
 			t := r.task.Task
 			return m, m.openEditor(newTaskForm(&t, t.ProjectID, m.projectOptions(), m.now(), 0, 0))
@@ -413,14 +472,85 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// areaHere is the area a new area or project goes in by default: the
+// selected row's area, or the zoomed area when nothing is selected.
+func (m *model) areaHere() int64 {
+	if r, ok := m.selected(); ok {
+		return r.areaOf()
+	}
+	return m.scope
+}
+
+// inside lists an area and every area within it, which an area cannot be
+// moved into.
+func inside(n task.AreaNode) map[int64]bool {
+	out := map[int64]bool{n.Area.ID: true}
+	for _, a := range n.Areas {
+		for id := range inside(a) {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+// zoomIn narrows the view to the selected area, or to the area the
+// selected project is in.
+func (m *model) zoomIn() {
+	r, ok := m.selected()
+	if !ok {
+		return
+	}
+	id := r.areaOf()
+	switch {
+	case id == 0:
+		m.status = "not in an area; n makes one"
+		return
+	case id == m.scope:
+		m.status = "already inside " + m.areaPath(id)
+		return
+	}
+	m.scope = id
+	m.cursor = 0
+	m.rebuildRows()
+	m.status = "inside " + m.areaPath(id) + "; h zooms out"
+}
+
+// zoomOut widens the view to the area around the zoomed one, with the
+// cursor left on the area just left.
+func (m *model) zoomOut() {
+	if m.scope == 0 {
+		m.status = "showing everything already"
+		return
+	}
+	from := m.scope
+	m.scope = 0
+	for _, a := range m.areas {
+		if a.ID == from {
+			m.scope = a.ParentID
+		}
+	}
+	m.cursor = 0
+	m.rebuildRows()
+	m.selectTarget(target{rowArea, from})
+	if m.scope == 0 {
+		m.status = "showing everything"
+	} else {
+		m.status = "inside " + m.areaPath(m.scope)
+	}
+}
+
 // advance is the space bar: a task steps todo, doing, done; a subtask
-// toggles its tick; a project steps active, done, shelved.
+// toggles its tick; a project steps active, done, shelved. An area has
+// no state to step.
 func (m *model) advance() {
 	r, ok := m.selected()
 	if !ok {
 		return
 	}
 	switch r.kind {
+	case rowArea:
+		m.status = "areas have no state; l zooms in, e renames, d deletes"
+		return
 	case rowSubtask:
 		done := !r.subtask.Done
 		if err := m.store.TickSubtask(m.ctx, r.subtask.ID, done); err != nil {
@@ -495,6 +625,9 @@ func (m *model) drop() {
 			return
 		}
 		m.status = fmt.Sprintf("project #%d %s", r.project.Project.ID, st)
+	case rowArea:
+		m.status = "areas have no state; d deletes one and moves what is in it up a level"
+		return
 	default:
 		m.status = "subtasks are ticked with space, or deleted with d"
 		return
@@ -522,6 +655,8 @@ func (m *model) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "y", "Y":
 		var err error
 		switch r.kind {
+		case rowArea:
+			err = m.store.DeleteArea(m.ctx, r.area.Area.ID)
 		case rowProject:
 			err = m.store.DeleteProject(m.ctx, r.project.Project.ID)
 		case rowTask:
@@ -550,6 +685,7 @@ var (
 	overdueStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	labelStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	projectStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
+	areaStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13"))
 	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	paneStyle     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("8")).Padding(0, 1)
 )
@@ -569,10 +705,14 @@ func (m *model) View() tea.View {
 	if m.view == viewDue {
 		title = "tasktracker · due"
 	}
-	b.WriteString(titleStyle.Render(title))
-	if m.showAll {
-		b.WriteString(dimStyle.Render(" · showing finished"))
+	if m.scope != 0 {
+		title += " · " + m.areaPath(m.scope)
 	}
+	head := titleStyle.Render(title)
+	if m.showAll {
+		head += dimStyle.Render(" · showing finished")
+	}
+	b.WriteString(ansi.Truncate(head, max(10, m.width), "…"))
 	b.WriteString("\n")
 	if m.mode == modeForm && m.form != nil {
 		b.WriteString(paneStyle.Width(m.width).Height(bodyH).Render(clipLines(m.form.View(), bodyH-2)))
@@ -605,9 +745,11 @@ func (m *model) viewList(w, h int) string {
 		switch {
 		case m.view == viewDue:
 			return dimStyle.Render("nothing due\n\nv goes back to the tree")
-		case len(m.tree) == 0 && !m.showAll:
+		case m.scope != 0:
+			return dimStyle.Render("nothing in " + m.areaPath(m.scope) + " yet\n\nA adds a project here; h zooms out")
+		case !m.showAll:
 			return dimStyle.Render("no projects yet\n\nA adds one; f shows finished projects")
-		case len(m.tree) == 0:
+		default:
 			return dimStyle.Render("no projects yet\n\nA adds one")
 		}
 	}
@@ -642,10 +784,16 @@ func statusGlyph(s task.Status) string {
 func (m *model) viewRow(r row, selected bool, w int) string {
 	var left, right, suffix string
 	finished := false
+	indent := strings.Repeat("  ", r.depth)
 	switch r.kind {
+	case rowArea:
+		left = indent + "▸ " + r.area.Area.Name
+		if n := r.area.OpenTasks(); n > 0 {
+			right = fmt.Sprintf("%d open", n)
+		}
 	case rowProject:
 		p := r.project.Project
-		left = p.Name
+		left = indent + p.Name
 		if n := r.project.OpenTasks(); n > 0 {
 			right = fmt.Sprintf("%d open", n)
 		}
@@ -655,7 +803,7 @@ func (m *model) viewRow(r row, selected bool, w int) string {
 		}
 	case rowTask:
 		t := r.task.Task
-		indent := "  "
+		indent += "  "
 		if m.view == viewDue {
 			indent = ""
 			suffix = "  " + r.project.Project.Name
@@ -671,7 +819,7 @@ func (m *model) viewRow(r row, selected bool, w int) string {
 		if r.subtask.Done {
 			box = "[x]"
 		}
-		left = fmt.Sprintf("    %s %s", box, r.subtask.Title)
+		left = fmt.Sprintf("%s    %s %s", indent, box, r.subtask.Title)
 	}
 	line := fit(left+suffix, right, w)
 	switch {
@@ -679,6 +827,8 @@ func (m *model) viewRow(r row, selected bool, w int) string {
 		return selectedStyle.Render(line)
 	case finished:
 		return dimStyle.Render(line)
+	case r.kind == rowArea:
+		return areaStyle.Render(line)
 	case r.kind == rowProject:
 		return projectStyle.Render(line)
 	}
@@ -726,9 +876,22 @@ func (m *model) viewDetail(w, h int) string {
 	label := func(name, value string) string { return cut(labelStyle.Render(name) + " " + value) }
 	var lines []string
 	switch r.kind {
+	case rowArea:
+		a := r.area.Area
+		lines = append(lines, strings.Split(wrap.Bold(true).Render(a.Name), "\n")...)
+		if a.ParentID != 0 {
+			lines = append(lines, label("in     ", m.areaPath(a.ParentID)))
+		}
+		areas, projects := r.area.Counts()
+		lines = append(lines, label("holds  ", fmt.Sprintf("%d areas, %d projects   ", areas, projects)+labelStyle.Render("id")+fmt.Sprintf(" #%d", a.ID)))
+		lines = append(lines, label("tasks  ", fmt.Sprintf("%d open", r.area.OpenTasks())))
+		lines = append(lines, "", dimStyle.Render("l zooms in"))
 	case rowProject:
 		p := r.project.Project
 		lines = append(lines, strings.Split(wrap.Bold(true).Render(p.Name), "\n")...)
+		if p.AreaID != 0 {
+			lines = append(lines, label("area ", m.areaPath(p.AreaID)))
+		}
 		lines = append(lines, label("state", string(p.State)+"   "+labelStyle.Render("id")+fmt.Sprintf(" #%d", p.ID)))
 		lines = append(lines, label("tasks", fmt.Sprintf("%d open, %d listed", r.project.OpenTasks(), len(r.project.Tasks))))
 		if p.Description != "" {
@@ -820,6 +983,8 @@ func (m *model) viewStatus() string {
 	case m.mode == modeConfirmDelete:
 		r, _ := m.selected()
 		switch r.kind {
+		case rowArea:
+			return errStyle.Render(fmt.Sprintf("delete area #%d %q and move what is in it up a level? y/N", r.area.Area.ID, r.area.Area.Name))
 		case rowProject:
 			return errStyle.Render(fmt.Sprintf("delete project #%d %q and every task in it? y/N", r.project.Project.ID, r.project.Project.Name))
 		case rowTask:
@@ -835,5 +1000,5 @@ func (m *model) helpLine() string {
 	if m.mode == modeForm && m.form != nil {
 		return m.form.help()
 	}
-	return "A project · a task · s subtask · e edit · space next status/tick · x drop · d delete · f finished · v due · j/k move · q quit"
+	return "n area · A project · a task · s subtask · e edit · space next status/tick · x drop · d delete · f finished · v due · l/h zoom in/out · j/k move · q quit"
 }

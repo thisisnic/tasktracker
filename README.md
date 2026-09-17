@@ -38,6 +38,10 @@ A project · a task · s subtask · e edit · space next status/tick · x drop �
    yourself.
 4. Mark a project `done` or `shelved` when it is over. Finished projects
    and tasks are hidden from the tree until you ask for them.
+5. Once there are enough projects, group them into areas. An area is a
+   name that holds projects and other areas, so "arrow" can hold "stf" and
+   "maintenance" with projects inside each. Zoom the tree to any area when
+   the whole thing is too much.
 
 The design notes behind this, in the owner's own words, are in
 [docs/design/tasks.md](docs/design/tasks.md).
@@ -48,16 +52,19 @@ The design notes behind this, in the owner's own words, are in
 tasktracker                      # open the terminal UI
 ```
 
-In the UI: `A` add a project, `a` add a task, `s` add a subtask, `e` edit,
-`space` step a task's status or tick a subtask, `x` drop a task or shelve a
-project, `d` delete, `f` show finished, `v` switch to the due list, `j`/`k`
-move, `q` quit.
+In the UI: `n` add an area, `A` add a project, `a` add a task, `s` add a
+subtask, `e` edit, `space` step a task's status or tick a subtask, `x` drop
+a task or shelve a project, `d` delete, `f` show finished, `v` switch to the
+due list, `l`/`h` zoom into an area and back out, `j`/`k` move, `q` quit.
 
 The same data is there on the command line, with `--json` for scripts and
 coding agents:
 
 ```bash
+tasktracker area add "arrow"
+tasktracker area add "stf" --in 1
 tasktracker project add "house" --description "fix it up" --goal 3
+tasktracker project add "grant report" --in 2
 tasktracker task add "paint the hall" --project 1 --due 2026-10-01
 tasktracker subtask add 1 "buy paint"
 tasktracker subtask tick 1
@@ -69,6 +76,10 @@ tasktracker task list --due --json
 
 - **Three levels, one tree** - Projects, tasks and subtasks, shown as a
   tree with open counts and due dates at a glance.
+- **Areas** - Group projects under names that nest as deep as you like.
+  An area is a label with a place in the tree, nothing more: no state, no
+  dates. Deleting one moves what was in it up a level. Zoom the tree or
+  the due list to any area with `l`, and back out with `h`.
 - **Due list** - Press `v` for every open task with a due date, soonest
   first, overdue ones in red.
 - **Checklists** - Subtasks are a title and a tick. The task's row shows
@@ -163,14 +174,18 @@ tasktracker update            # install it
 | Command | What it does |
 | --- | --- |
 | `tasktracker` | Open the terminal UI |
-| `tasktracker project add NAME` | Add a project; `--description`, `--goal` (repeatable), `--json` |
+| `tasktracker area add NAME` | Add an area; `--in` puts it inside another, `--json` |
+| `tasktracker area list` | Areas as a tree with project counts; `--json` |
+| `tasktracker area edit ID` | Rename or move an area; `--name`, `--in`, `--top` |
+| `tasktracker area delete ID` | Delete an area; what is in it moves up a level; `--yes` |
+| `tasktracker project add NAME` | Add a project; `--description`, `--in` (area), `--goal` (repeatable), `--json` |
 | `tasktracker project list` | List active projects; `--all`, `--state`, `--json` |
 | `tasktracker project show ID` | One project with its goals and tasks; `--json` |
-| `tasktracker project edit ID` | Change name, description or goals; `--goal` replaces the set, `--no-goals` clears it |
+| `tasktracker project edit ID` | Change name, description, area or goals; `--in` / `--top` move it, `--goal` replaces the set, `--no-goals` clears it |
 | `tasktracker project mark ID active\|done\|shelved` | Set a project's state |
 | `tasktracker project delete ID` | Delete a project with all its tasks; `--yes` |
 | `tasktracker task add TITLE --project ID` | Add a task; `--due`, `--json` |
-| `tasktracker task list` | Show the tree of open tasks; `--all`, `--project`, `--status`, `--due`, `--json` |
+| `tasktracker task list` | Show the tree of areas, projects and open tasks; `--all`, `--project`, `--status`, `--due`, `--json` |
 | `tasktracker task show ID` | One task with its subtasks; `--json` |
 | `tasktracker task edit ID` | Change title, due date or project; `--no-due` |
 | `tasktracker task mark ID todo\|doing\|done\|dropped` | Set a task's status |

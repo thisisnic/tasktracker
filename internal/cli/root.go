@@ -49,7 +49,8 @@ func New() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "tasktracker",
 		Short: "A personal tracker for projects, tasks and subtasks",
-		Long: `tasktracker is a local tracker for projects, tasks and subtasks.
+		Long: `tasktracker is a local tracker for projects, tasks and subtasks, with
+areas above projects to group them.
 
 Run it with no arguments to open the terminal UI. Subcommands give the same
 data a scriptable interface; add --json to any list or show command for
@@ -72,7 +73,7 @@ TUI writes one every time it exits.`,
 	root.PersistentFlags().StringVar(&dbPath, "db", DefaultDBPath(), "path to the SQLite database (env TASKTRACKER_DB)")
 	root.PersistentFlags().StringVar(&cfgPath, "config", config.Path(), "path to the config file")
 	root.SetVersionTemplate("tasktracker {{.Version}}\n")
-	root.AddCommand(projectCmd(&dbPath, &cfgPath), taskCmd(&dbPath), subtaskCmd(&dbPath), keyCmd(), backupCmd(&dbPath, &cfgPath), restoreCmd(&dbPath, &cfgPath), versionCmd(), updateCmd())
+	root.AddCommand(areaCmd(&dbPath), projectCmd(&dbPath, &cfgPath), taskCmd(&dbPath), subtaskCmd(&dbPath), keyCmd(), backupCmd(&dbPath, &cfgPath), restoreCmd(&dbPath, &cfgPath), versionCmd(), updateCmd())
 	return root
 }
 

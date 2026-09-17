@@ -79,17 +79,74 @@ func required(what string) func(string) error {
 	}
 }
 
+// ---- area ----
+
+// areaForm adds or edits an area: a name and the area it sits in.
+type areaForm struct {
+	huhForm
+	editID int64 // 0 when adding
+	name   string
+	parent int64 // 0 for the top level
+}
+
+// areaOptions is a pick list of areas by path, with none first under the
+// given label. Areas in blocked are left out: when editing an area, that
+// is the area itself and everything inside it.
+func areaOptions(none string, areas []task.Area, blocked map[int64]bool) []huh.Option[int64] {
+	opts := []huh.Option[int64]{huh.NewOption(none, int64(0))}
+	for _, a := range areas {
+		if !blocked[a.ID] {
+			opts = append(opts, huh.NewOption(task.AreaPath(areas, a.ID), a.ID))
+		}
+	}
+	return opts
+}
+
+func newAreaForm(existing *task.Area, parentID int64, areas []task.Area, blocked map[int64]bool, width, height int) *areaForm {
+	f := &areaForm{parent: parentID}
+	if existing != nil {
+		f.editID = existing.ID
+		f.name = existing.Name
+		f.parent = existing.ParentID
+	}
+	title := "New area"
+	if existing != nil {
+		title = fmt.Sprintf("Edit area #%d", existing.ID)
+	}
+	fields := []huh.Field{
+		huh.NewInput().Title("Area").Description("a name to group projects under").Value(&f.name).Validate(required("area")),
+	}
+	if opts := areaOptions("(top level)", areas, blocked); len(opts) > 1 {
+		fields = append(fields, huh.NewSelect[int64]().Title("Inside").Options(opts...).Value(&f.parent).Height(8))
+	} else {
+		f.parent = 0
+	}
+	f.form = huh.NewForm(huh.NewGroup(fields...).Title(title)).WithShowHelp(true)
+	f.resize(width, height)
+	return f
+}
+
+func (f *areaForm) apply(m *model) (target, error) {
+	if f.editID == 0 {
+		a, err := m.store.AddArea(m.ctx, task.NewArea{Name: f.name, ParentID: f.parent})
+		return target{rowArea, a.ID}, err
+	}
+	a, err := m.store.UpdateArea(m.ctx, f.editID, task.AreaEdit{Name: &f.name, ParentID: &f.parent})
+	return target{rowArea, a.ID}, err
+}
+
 // ---- project ----
 
 // projectForm adds or edits a project. Goals come from goaltracker as a
 // pick list when its database can be read, and as a typed list of ids
-// otherwise.
+// otherwise. The area field is only shown once there are areas.
 type projectForm struct {
 	huhForm
 	editID int64 // 0 when adding
 
 	name        string
 	description string
+	area        int64 // 0 for none
 	state       task.State
 	goalPicks   []int64 // when a pick list is offered
 	goalText    string  // otherwise: comma-separated ids
@@ -109,12 +166,13 @@ func (m *model) goalOptions() []goallink.Goal {
 	return goals
 }
 
-func newProjectForm(existing *task.Project, goals []goallink.Goal, width, height int) *projectForm {
-	f := &projectForm{state: task.Active, pickList: len(goals) > 0}
+func newProjectForm(existing *task.Project, areaID int64, areas []task.Area, goals []goallink.Goal, width, height int) *projectForm {
+	f := &projectForm{area: areaID, state: task.Active, pickList: len(goals) > 0}
 	if existing != nil {
 		f.editID = existing.ID
 		f.name = existing.Name
 		f.description = existing.Description
+		f.area = existing.AreaID
 		f.state = existing.State
 		f.goalPicks = append([]int64{}, existing.GoalIDs...)
 		f.goalText = idsText(existing.GoalIDs)
@@ -126,6 +184,11 @@ func newProjectForm(existing *task.Project, goals []goallink.Goal, width, height
 	fields := []huh.Field{
 		huh.NewInput().Title("Project").Value(&f.name).Validate(required("project")),
 		huh.NewText().Title("About").Lines(3).Value(&f.description),
+	}
+	if len(areas) > 0 {
+		fields = append(fields, huh.NewSelect[int64]().Title("Area").Options(areaOptions("(none)", areas, nil)...).Value(&f.area).Height(8))
+	} else {
+		f.area = 0
 	}
 	if existing != nil {
 		fields = append(fields, huh.NewSelect[task.State]().Title("State").Options(
@@ -194,10 +257,10 @@ func (f *projectForm) apply(m *model) (target, error) {
 		}
 	}
 	if f.editID == 0 {
-		p, err := m.store.AddProject(m.ctx, task.NewProject{Name: f.name, Description: f.description, GoalIDs: goals})
+		p, err := m.store.AddProject(m.ctx, task.NewProject{Name: f.name, Description: f.description, AreaID: f.area, GoalIDs: goals})
 		return target{rowProject, p.ID}, err
 	}
-	p, err := m.store.UpdateProject(m.ctx, f.editID, task.ProjectEdit{Name: &f.name, Description: &f.description, State: &f.state, GoalIDs: &goals})
+	p, err := m.store.UpdateProject(m.ctx, f.editID, task.ProjectEdit{Name: &f.name, Description: &f.description, State: &f.state, AreaID: &f.area, GoalIDs: &goals})
 	return target{rowProject, p.ID}, err
 }
 

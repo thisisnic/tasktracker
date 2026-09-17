@@ -1,7 +1,8 @@
 // Package task holds the project, task and subtask model and its SQLite
 // store.
 //
-// The hierarchy is project > task > subtask. A project has a name, a
+// The hierarchy is project > task > subtask, with areas above projects for
+// grouping: an area holds projects and other areas. A project has a name, a
 // description, an end state and zero or more links to goals in goaltracker.
 // A task has a title, a status and an optional due date. A subtask is a
 // checklist item: a title and a tick. Ticking every subtask does not finish
@@ -44,6 +45,7 @@ type Project struct {
 	Name        string    `json:"name"`
 	Description string    `json:"description,omitempty"`
 	State       State     `json:"state"`
+	AreaID      int64     `json:"area_id,omitempty"`  // the area the project is in; 0 for none
 	GoalIDs     []int64   `json:"goal_ids,omitempty"` // goaltracker goal ids this project serves
 	CreatedAt   time.Time `json:"created_at"`
 }
