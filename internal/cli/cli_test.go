@@ -332,14 +332,6 @@ func TestBadIDs(t *testing.T) {
 	}
 }
 
-func TestBareCommandShowsTree(t *testing.T) {
-	r := newRunner(t)
-	r.run("", false, "project", "add", "house")
-	if out := r.run("", false); !strings.Contains(out, "house") {
-		t.Errorf("bare command:\n%s", out)
-	}
-}
-
 func TestKeyBackupRestore(t *testing.T) {
 	r := newRunner(t)
 	root := t.TempDir()

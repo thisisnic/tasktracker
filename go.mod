@@ -3,8 +3,12 @@ module github.com/thisisnic/tasktracker
 go 1.26.4
 
 require (
+	charm.land/bubbletea/v2 v2.0.9
+	charm.land/huh/v2 v2.0.3
+	charm.land/lipgloss/v2 v2.0.6
 	filippo.io/age v1.3.2
 	github.com/BurntSushi/toml v1.6.0
+	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/mod v0.41.0
 	modernc.org/sqlite v1.59.0
@@ -12,15 +16,11 @@ require (
 
 require (
 	charm.land/bubbles/v2 v2.2.1 // indirect
-	charm.land/bubbletea/v2 v2.0.9 // indirect
-	charm.land/huh/v2 v2.0.3 // indirect
-	charm.land/lipgloss/v2 v2.0.6 // indirect
 	filippo.io/hpke v0.4.0 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/catppuccin/go v0.2.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260811164956-006e29f97886 // indirect
-	github.com/charmbracelet/x/ansi v0.11.8 // indirect
 	github.com/charmbracelet/x/exp/ordered v0.1.0 // indirect
 	github.com/charmbracelet/x/exp/strings v0.0.0-20240722160745-212f7b056ed0 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
