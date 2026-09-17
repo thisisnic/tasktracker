@@ -10,6 +10,43 @@ import (
 	"testing"
 )
 
+// addProject, addTask and addSubtask are setup steps that fail the test
+// rather than returning an error, for tests that are about something else.
+func addProject(t *testing.T, s *Store, in NewProject) Project {
+	t.Helper()
+	p, err := s.AddProject(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func addTask(t *testing.T, s *Store, in NewTask) Task {
+	t.Helper()
+	task, err := s.AddTask(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return task
+}
+
+func addSubtask(t *testing.T, s *Store, taskID int64, title string) Subtask {
+	t.Helper()
+	st, err := s.AddSubtask(context.Background(), taskID, title)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
+}
+
+// check fails the test on err, for setup steps with no result.
+func check(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func open(t *testing.T) *Store {
 	t.Helper()
 	s, err := Open(filepath.Join(t.TempDir(), "tasktracker.db"))
@@ -93,8 +130,8 @@ func TestProjectLifecycle(t *testing.T) {
 func TestTaskLifecycle(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)
-	p, _ := s.AddProject(ctx, NewProject{Name: "house"})
-	other, _ := s.AddProject(ctx, NewProject{Name: "work"})
+	p := addProject(t, s, NewProject{Name: "house"})
+	other := addProject(t, s, NewProject{Name: "work"})
 	task, err := s.AddTask(ctx, NewTask{ProjectID: p.ID, Title: " paint the hall ", Due: "2026-10-01"})
 	if err != nil {
 		t.Fatal(err)
@@ -145,13 +182,13 @@ func TestTaskLifecycle(t *testing.T) {
 func TestListTasksFilters(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)
-	p, _ := s.AddProject(ctx, NewProject{Name: "a"})
-	q, _ := s.AddProject(ctx, NewProject{Name: "b"})
-	t1, _ := s.AddTask(ctx, NewTask{ProjectID: p.ID, Title: "later", Due: "2026-12-01"})
-	t2, _ := s.AddTask(ctx, NewTask{ProjectID: q.ID, Title: "sooner", Due: "2026-10-01"})
-	t3, _ := s.AddTask(ctx, NewTask{ProjectID: p.ID, Title: "whenever"})
-	t4, _ := s.AddTask(ctx, NewTask{ProjectID: p.ID, Title: "finished", Due: "2026-09-01"})
-	s.MarkTask(ctx, t4.ID, Finished)
+	p := addProject(t, s, NewProject{Name: "a"})
+	q := addProject(t, s, NewProject{Name: "b"})
+	t1 := addTask(t, s, NewTask{ProjectID: p.ID, Title: "later", Due: "2026-12-01"})
+	t2 := addTask(t, s, NewTask{ProjectID: q.ID, Title: "sooner", Due: "2026-10-01"})
+	t3 := addTask(t, s, NewTask{ProjectID: p.ID, Title: "whenever"})
+	t4 := addTask(t, s, NewTask{ProjectID: p.ID, Title: "finished", Due: "2026-09-01"})
+	check(t, s.MarkTask(ctx, t4.ID, Finished))
 
 	ids := func(ts []Task) []int64 {
 		var out []int64
@@ -182,13 +219,13 @@ func TestListTasksFilters(t *testing.T) {
 func TestSubtasksAndCascade(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)
-	p, _ := s.AddProject(ctx, NewProject{Name: "party"})
-	task, _ := s.AddTask(ctx, NewTask{ProjectID: p.ID, Title: "invites"})
+	p := addProject(t, s, NewProject{Name: "party"})
+	task := addTask(t, s, NewTask{ProjectID: p.ID, Title: "invites"})
 	a, err := s.AddSubtask(ctx, task.ID, " write list ")
 	if err != nil || a.Title != "write list" || a.Done || a.TaskID != task.ID {
 		t.Fatalf("AddSubtask = %+v, %v", a, err)
 	}
-	b, _ := s.AddSubtask(ctx, task.ID, "send")
+	b := addSubtask(t, s, task.ID, "send")
 	if _, err := s.AddSubtask(ctx, task.ID, ""); err == nil {
 		t.Error("blank subtask accepted")
 	}
@@ -209,7 +246,7 @@ func TestSubtasksAndCascade(t *testing.T) {
 		t.Errorf("ListSubtasks = %+v, %v", subs, err)
 	}
 	// Ticking everything does not finish the task.
-	s.TickSubtask(ctx, b.ID, true)
+	check(t, s.TickSubtask(ctx, b.ID, true))
 	if got, _ := s.GetTask(ctx, task.ID); got.Status != Todo {
 		t.Errorf("task auto-closed: %s", got.Status)
 	}
@@ -244,16 +281,16 @@ func TestSubtasksAndCascade(t *testing.T) {
 func TestTree(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)
-	p, _ := s.AddProject(ctx, NewProject{Name: "a", GoalIDs: []int64{1}})
-	q, _ := s.AddProject(ctx, NewProject{Name: "b"})
-	empty, _ := s.AddProject(ctx, NewProject{Name: "c"})
-	s.MarkProject(ctx, q.ID, Done)
-	t1, _ := s.AddTask(ctx, NewTask{ProjectID: p.ID, Title: "one"})
-	t2, _ := s.AddTask(ctx, NewTask{ProjectID: p.ID, Title: "two"})
-	s.MarkTask(ctx, t2.ID, Dropped)
-	s.AddTask(ctx, NewTask{ProjectID: q.ID, Title: "three"})
-	s.AddSubtask(ctx, t1.ID, "x")
-	s.AddSubtask(ctx, t1.ID, "y")
+	p := addProject(t, s, NewProject{Name: "a", GoalIDs: []int64{1}})
+	q := addProject(t, s, NewProject{Name: "b"})
+	empty := addProject(t, s, NewProject{Name: "c"})
+	check(t, s.MarkProject(ctx, q.ID, Done))
+	t1 := addTask(t, s, NewTask{ProjectID: p.ID, Title: "one"})
+	t2 := addTask(t, s, NewTask{ProjectID: p.ID, Title: "two"})
+	check(t, s.MarkTask(ctx, t2.ID, Dropped))
+	addTask(t, s, NewTask{ProjectID: q.ID, Title: "three"})
+	addSubtask(t, s, t1.ID, "x")
+	addSubtask(t, s, t1.ID, "y")
 
 	tree, err := s.Tree(ctx, false)
 	if err != nil {
@@ -308,7 +345,7 @@ func TestOpenLeavesUserDirAlone(t *testing.T) {
 		t.Skip("no unix modes on windows")
 	}
 	dir := t.TempDir()
-	os.Chmod(dir, 0o755)
+	check(t, os.Chmod(dir, 0o755))
 	s, err := Open(filepath.Join(dir, "tasktracker.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -330,13 +367,18 @@ func TestOpenLeavesUserDirAlone(t *testing.T) {
 func TestSnapshotTo(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)
-	s.AddProject(ctx, NewProject{Name: "a"})
+	addProject(t, s, NewProject{Name: "a"})
 	out := filepath.Join(t.TempDir(), "snap.db")
 	if err := s.SnapshotTo(ctx, out); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SnapshotTo(ctx, out); err == nil {
 		t.Error("overwrote an existing snapshot")
+	}
+	if runtime.GOOS != "windows" {
+		if info, _ := os.Stat(out); info.Mode().Perm() != 0o600 {
+			t.Errorf("snapshot mode = %o, want 600", info.Mode().Perm())
+		}
 	}
 	copy, err := Open(out)
 	if err != nil {

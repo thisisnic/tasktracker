@@ -91,20 +91,17 @@ func Open(path string, opts ...Option) (*Store, error) {
 	if err := restrict(dir, path, created || o.ownDir); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", path)
+	// The pragmas ride on the DSN so that every connection the pool opens
+	// gets them, not just the first. Cascading deletes depend on
+	// foreign_keys being on.
+	db, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	for _, pragma := range []string{
-		"PRAGMA foreign_keys = ON",
-		"PRAGMA journal_mode = WAL",
-		"PRAGMA busy_timeout = 5000",
-	} {
-		if _, err := db.Exec(pragma); err != nil {
-			db.Close()
-			return nil, fmt.Errorf("%s: %w", pragma, err)
-		}
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("open database: %w", err)
 	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
@@ -145,12 +142,19 @@ func (s *Store) Close() error { return s.db.Close() }
 
 // SnapshotTo writes a consistent copy of the database to path using
 // VACUUM INTO, which is safe while the database is open and in WAL mode.
-// path must not already exist.
+// path must not already exist. The copy is owner-only like the original:
+// the file is created empty with that mode first, which VACUUM INTO
+// accepts as a target.
 func (s *Store) SnapshotTo(ctx context.Context, path string) error {
-	if _, err := os.Stat(path); err == nil {
-		return fmt.Errorf("snapshot %s: already exists", path)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("snapshot %s: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("snapshot %s: %w", path, err)
 	}
 	if _, err := s.db.ExecContext(ctx, `VACUUM INTO ?`, path); err != nil {
+		os.Remove(path)
 		return fmt.Errorf("snapshot: %w", err)
 	}
 	return nil
@@ -246,12 +250,25 @@ func (s *Store) GetProject(ctx context.Context, id int64) (Project, error) {
 	if err != nil {
 		return Project{}, err
 	}
-	goals, err := s.goalsByProject(ctx)
+	p.GoalIDs, err = s.goalsFor(ctx, id)
+	return p, err
+}
+
+func (s *Store) goalsFor(ctx context.Context, projectID int64) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT goal_id FROM project_goals WHERE project_id = ? ORDER BY goal_id`, projectID)
 	if err != nil {
-		return Project{}, err
+		return nil, err
 	}
-	p.GoalIDs = goals[id]
-	return p, nil
+	defer rows.Close()
+	var out []int64
+	for rows.Next() {
+		var g int64
+		if err := rows.Scan(&g); err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) goalsByProject(ctx context.Context) (map[int64][]int64, error) {
@@ -398,7 +415,7 @@ func (s *Store) DeleteProject(ctx context.Context, id int64) error {
 type NewTask struct {
 	ProjectID int64
 	Title     string
-	Due       string // already normalised by ParseDue, or empty
+	Due       string // anything ParseDue accepts, or empty for none
 }
 
 // AddTask validates and inserts a task under a project.
@@ -674,9 +691,10 @@ func (s *Store) DeleteSubtask(ctx context.Context, id int64) error {
 
 // ---- tree ----
 
-// Tree loads every project with its tasks and subtasks, in three queries.
-// Projects, tasks and subtasks are each in id order. With all false, done
-// and shelved projects are left out, and so are done and dropped tasks.
+// Tree loads every project with its tasks and subtasks, in a fixed number
+// of queries however much data there is. Projects, tasks and subtasks are
+// each in id order. With all false, done and shelved projects are left out,
+// and so are done and dropped tasks and their subtasks.
 func (s *Store) Tree(ctx context.Context, all bool) ([]ProjectNode, error) {
 	projects, err := s.ListProjects(ctx, ProjectFilter{All: all})
 	if err != nil {
@@ -686,7 +704,11 @@ func (s *Store) Tree(ctx context.Context, all bool) ([]ProjectNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, selectSubtask+" ORDER BY task_id, id")
+	q := selectSubtask
+	if !all {
+		q += " WHERE task_id IN (SELECT id FROM tasks WHERE status IN ('todo','doing'))"
+	}
+	rows, err := s.db.QueryContext(ctx, q+" ORDER BY task_id, id")
 	if err != nil {
 		return nil, err
 	}
