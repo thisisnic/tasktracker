@@ -194,11 +194,12 @@ func AreaPath(areas []Area, id int64) string {
 // ---- outline ----
 
 // AreaNode is an area with what is in it, for the tree view: its areas
-// first, then its projects, each in id order.
+// first, then its projects, each in id order. Both lists are always
+// present in JSON, empty rather than null, so scripts can iterate them.
 type AreaNode struct {
 	Area     Area          `json:"area"`
-	Areas    []AreaNode    `json:"areas,omitempty"`
-	Projects []ProjectNode `json:"projects,omitempty"`
+	Areas    []AreaNode    `json:"areas"`
+	Projects []ProjectNode `json:"projects"`
 }
 
 // OpenTasks counts the open tasks in every project inside the area,
@@ -289,26 +290,32 @@ func Nest(areas []Area, projects []ProjectNode) Outline {
 		}
 		byArea[area] = append(byArea[area], p)
 	}
+	projectsIn := func(id int64) []ProjectNode {
+		if ps := byArea[id]; ps != nil {
+			return ps
+		}
+		return []ProjectNode{}
+	}
 	placed := map[int64]bool{}
 	var build func(parent int64) []AreaNode
 	build = func(parent int64) []AreaNode {
-		var out []AreaNode
+		out := []AreaNode{}
 		for _, a := range children[parent] {
 			if placed[a.ID] {
 				continue
 			}
 			placed[a.ID] = true
-			out = append(out, AreaNode{Area: a, Areas: build(a.ID), Projects: byArea[a.ID]})
+			out = append(out, AreaNode{Area: a, Areas: build(a.ID), Projects: projectsIn(a.ID)})
 		}
 		return out
 	}
-	o := Outline{Areas: build(0), Projects: byArea[0]}
+	o := Outline{Areas: build(0), Projects: projectsIn(0)}
 	// Areas in a cycle are reached from no root. Only a hand-edited
 	// database can have one; show them at the top rather than hide them.
 	for _, a := range areas {
 		if !placed[a.ID] {
 			placed[a.ID] = true
-			o.Areas = append(o.Areas, AreaNode{Area: a, Areas: build(a.ID), Projects: byArea[a.ID]})
+			o.Areas = append(o.Areas, AreaNode{Area: a, Areas: build(a.ID), Projects: projectsIn(a.ID)})
 		}
 	}
 	return o

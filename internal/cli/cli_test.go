@@ -328,6 +328,29 @@ func TestEmptyJSONIsArray(t *testing.T) {
 	}
 }
 
+func TestTreeJSONHasNoNulls(t *testing.T) {
+	// An empty area, a project with no tasks and a task with no subtasks
+	// each print [] for what they lack, as the README promises.
+	r := newRunner(t)
+	r.run("", false, "area", "add", "empty")
+	r.run("", false, "area", "add", "arrow")
+	r.run("", false, "project", "add", "bare", "--in", "2")
+	r.run("", false, "project", "add", "house")
+	r.run("", false, "task", "add", "paint", "--project", "2")
+	out := r.run("", false, "task", "list", "--json")
+	if strings.Contains(out, "null") {
+		t.Fatalf("tree JSON has a null:\n%s", out)
+	}
+	var o task.Outline
+	if err := json.Unmarshal([]byte(out), &o); err != nil {
+		t.Fatal(err)
+	}
+	empty, arrow := o.Areas[0], o.Areas[1]
+	if empty.Areas == nil || empty.Projects == nil || arrow.Areas == nil || arrow.Projects[0].Tasks == nil || o.Projects[0].Tasks[0].Subtasks == nil {
+		t.Errorf("a nested list is missing: %s", out)
+	}
+}
+
 func TestAreas(t *testing.T) {
 	r := newRunner(t)
 	out := r.run("", false, "area", "add", "arrow")

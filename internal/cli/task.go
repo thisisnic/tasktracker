@@ -91,12 +91,6 @@ and finished projects. --due lists only tasks with a due date, soonest first.
 					return err
 				}
 				if asJSON {
-					if outline.Areas == nil {
-						outline.Areas = []task.AreaNode{}
-					}
-					if outline.Projects == nil {
-						outline.Projects = []task.ProjectNode{}
-					}
 					return writeJSON(cmd.OutOrStdout(), outline)
 				}
 				printTree(cmd.OutOrStdout(), outline)

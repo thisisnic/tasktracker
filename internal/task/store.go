@@ -826,13 +826,23 @@ func (s *Store) Tree(ctx context.Context, all bool) ([]ProjectNode, error) {
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	// Every list is a real slice, never nil, so the JSON of the tree has
+	// [] rather than null wherever a project or task holds nothing.
 	byProject := map[int64][]TaskNode{}
 	for _, t := range tasks {
-		byProject[t.ProjectID] = append(byProject[t.ProjectID], TaskNode{Task: t, Subtasks: subs[t.ID]})
+		st := subs[t.ID]
+		if st == nil {
+			st = []Subtask{}
+		}
+		byProject[t.ProjectID] = append(byProject[t.ProjectID], TaskNode{Task: t, Subtasks: st})
 	}
 	out := make([]ProjectNode, 0, len(projects))
 	for _, p := range projects {
-		out = append(out, ProjectNode{Project: p, Tasks: byProject[p.ID]})
+		ts := byProject[p.ID]
+		if ts == nil {
+			ts = []TaskNode{}
+		}
+		out = append(out, ProjectNode{Project: p, Tasks: ts})
 	}
 	return out, nil
 }
