@@ -98,6 +98,13 @@ func goalReader(cmd *cobra.Command, cfgPath string) *goallink.Reader {
 	if err != nil {
 		fmt.Fprintf(cmd.ErrOrStderr(), "note: config: %v; using goaltracker's default database\n", err)
 	}
+	return goalsFor(cfg, err)
+}
+
+// goalsFor picks the goaltracker database from a loaded config: the one it
+// names, or goaltracker's own default location when it names none or
+// could not be read (err is config.Load's error).
+func goalsFor(cfg config.Config, err error) *goallink.Reader {
 	if err == nil && cfg.Goaltracker.DB != "" {
 		return goallink.New(cfg.Goaltracker.DB)
 	}

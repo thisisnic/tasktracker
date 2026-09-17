@@ -302,8 +302,8 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	t, err := m.form.apply(m)
 	if err != nil {
 		// Keep the form, and what was typed, so the user can fix it or
-		// cancel with esc. The form is complete, so a fresh copy of it is
-		// needed to take input again.
+		// cancel with esc. The form has completed, so it must be put back
+		// to work before it takes input again.
 		m.err = err
 		m.mode = modeForm
 		return m, m.form.retry()
@@ -685,8 +685,13 @@ func (m *model) viewRow(r row, selected bool, w int) string {
 	// Style parts of the line by position, never by searching for text
 	// that a title could also contain.
 	head, tail := line[:len(line)-len(right)], line[len(line)-len(right):]
-	if suffix != "" && strings.HasPrefix(head, left+suffix) {
-		head = left + dimStyle.Render(suffix) + head[len(left)+len(suffix):]
+	if suffix != "" && strings.HasPrefix(head, left) {
+		// fit may have cut the suffix short: dim whatever of it is visible,
+		// from the end of left to the end of the text, leaving the padding.
+		text := strings.TrimRight(head, " ")
+		if len(text) > len(left) {
+			head = left + dimStyle.Render(text[len(left):]) + head[len(text):]
+		}
 	}
 	if r.kind == rowTask {
 		t := r.task.Task

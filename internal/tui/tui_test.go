@@ -488,12 +488,31 @@ func TestDueViewRowStyling(t *testing.T) {
 		t.Fatalf("rows not found:\n%s", view)
 	}
 	// The selected row is one reverse-video run: no reset before the end.
-	inner := selected[strings.Index(selected, "\x1b[7m")+4:]
+	start := strings.Index(selected, "\x1b[7m")
+	if start < 0 {
+		t.Fatalf("selected row not highlighted: %q", selected)
+	}
+	inner := selected[start+4:]
 	if i := strings.Index(inner, "\x1b[m"); i < 0 || strings.Contains(inner[:i], "\x1b[") {
 		t.Errorf("selected row is not one highlight run: %q", selected)
 	}
 	if !strings.Contains(overdue, overdueStyle.Render("2026-09-10")) {
 		t.Errorf("overdue date not red: %q", overdue)
+	}
+	if !strings.Contains(overdue, dimStyle.Render("  house")) {
+		t.Errorf("project name not dimmed: %q", overdue)
+	}
+	// Narrow enough that the project name is cut short: what is left of it
+	// is still dimmed, and the title is not.
+	m.Update(tea.WindowSizeMsg{Width: 73, Height: 30})
+	overdue = ""
+	for _, l := range strings.Split(m.View().Content, "\n") {
+		if strings.Contains(l, "paint the hall") {
+			overdue = l
+		}
+	}
+	if !strings.Contains(overdue, "paint the hall"+dimStyle.Render("  ho…")) {
+		t.Errorf("cut project name not dimmed: %q", overdue)
 	}
 }
 

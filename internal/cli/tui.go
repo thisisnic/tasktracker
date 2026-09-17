@@ -6,7 +6,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/thisisnic/tasktracker/internal/config"
-	"github.com/thisisnic/tasktracker/internal/goallink"
 	"github.com/thisisnic/tasktracker/internal/task"
 	"github.com/thisisnic/tasktracker/internal/tui"
 )
@@ -19,10 +18,7 @@ func runTUI(cmd *cobra.Command, dbPath, cfgPath string) error {
 	// once: the goal reader falls back quietly rather than printing a
 	// note the alt screen would hide anyway.
 	cfg, cfgErr := config.Load(cfgPath)
-	goals := goallink.New(goallink.DefaultPath())
-	if cfgErr == nil && cfg.Goaltracker.DB != "" {
-		goals = goallink.New(cfg.Goaltracker.DB)
-	}
+	goals := goalsFor(cfg, cfgErr)
 	store, err := openStore(&dbPath)
 	if err != nil {
 		return err
