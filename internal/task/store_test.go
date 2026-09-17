@@ -396,7 +396,11 @@ func TestSnapshotTo(t *testing.T) {
 
 func TestOpenEscapesAwkwardPaths(t *testing.T) {
 	ctx := context.Background()
-	dir := filepath.Join(t.TempDir(), "a?b#c%20d e")
+	name := "a?b#c%20d e"
+	if runtime.GOOS == "windows" {
+		name = "a#b%20c d" // ? is not allowed in Windows paths
+	}
+	dir := filepath.Join(t.TempDir(), name)
 	path := filepath.Join(dir, "tasktracker.db")
 	s, err := Open(path)
 	if err != nil {
