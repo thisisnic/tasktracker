@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -511,5 +512,28 @@ func TestRestoreRefusesNonDatabase(t *testing.T) {
 	}
 	if exists(e.dbPath + ".restore-tmp") {
 		t.Error("temp file left behind")
+	}
+}
+
+func TestWriteSyncedReplacesStaleFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unix file modes")
+	}
+	path := filepath.Join(t.TempDir(), "x.restore-tmp")
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSynced(path, []byte("fresh")); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("stale file's mode %o kept, want 600", info.Mode().Perm())
+	}
+	if got, _ := os.ReadFile(path); string(got) != "fresh" {
+		t.Errorf("content = %q", got)
 	}
 }

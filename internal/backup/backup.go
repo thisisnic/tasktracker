@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -268,21 +269,47 @@ var sidecars = []string{"-wal", "-shm"}
 var rename = os.Rename
 
 // writeSynced writes data to a new owner-only file and syncs it, so a crash
-// right after the rename that follows cannot leave the file truncated.
+// right after the rename that follows cannot leave the file truncated. A
+// stale file at path from an earlier run is removed first rather than
+// reused, so its mode cannot leak; a failed write leaves nothing behind.
 func writeSynced(path string, data []byte) error {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
 	if _, err := f.Write(data); err != nil {
 		f.Close()
+		os.Remove(path)
 		return err
 	}
 	if err := f.Sync(); err != nil {
 		f.Close()
+		os.Remove(path)
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		os.Remove(path)
+		return err
+	}
+	return nil
+}
+
+// syncDir flushes a directory's entries so renames in it survive a crash.
+// Errors are ignored: not every filesystem supports it, and the renames
+// themselves have already succeeded.
+func syncDir(dir string) {
+	if runtime.GOOS == "windows" {
+		return
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	d.Sync()
+	d.Close()
 }
 
 // Restore replaces the database at dbPath with the decrypted backup. The
@@ -346,6 +373,7 @@ func Restore(backupFile, identityFile, dbPath string, now time.Time) (kept strin
 		}
 		return "", err
 	}
+	syncDir(filepath.Dir(dbPath))
 	return kept, nil
 }
 

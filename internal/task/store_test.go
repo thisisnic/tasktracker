@@ -393,3 +393,27 @@ func TestSnapshotTo(t *testing.T) {
 		t.Errorf("snapshot has %d projects", len(ps))
 	}
 }
+
+func TestOpenEscapesAwkwardPaths(t *testing.T) {
+	ctx := context.Background()
+	dir := filepath.Join(t.TempDir(), "a?b#c%20d e")
+	path := filepath.Join(dir, "tasktracker.db")
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("database not at the exact path: %v", err)
+	}
+	var fk int
+	if err := s.db.QueryRow(`PRAGMA foreign_keys`).Scan(&fk); err != nil || fk != 1 {
+		t.Errorf("foreign_keys = %d, %v; the DSN parameters were lost", fk, err)
+	}
+	p := addProject(t, s, NewProject{Name: "x"})
+	task := addTask(t, s, NewTask{ProjectID: p.ID, Title: "y"})
+	check(t, s.DeleteProject(ctx, p.ID))
+	if _, err := s.GetTask(ctx, task.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("delete did not cascade under an awkward path: %v", err)
+	}
+}
