@@ -56,6 +56,9 @@ In the UI: `n` add an area, `A` add a project, `a` add a task, `s` add a
 subtask, `e` edit, `space` step a task's status or tick a subtask, `x` drop
 a task or shelve a project, `d` delete, `f` show finished, `v` switch to the
 due list, `l`/`h` zoom into an area and back out, `j`/`k` move, `q` quit.
+On a project, `space` steps active → done → shelved, but asks `y/N` before
+leaving active, since a done or shelved project is hidden with every task
+in it.
 
 The same data is there on the command line, with `--json` for scripts and
 coding agents:

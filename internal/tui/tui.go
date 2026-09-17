@@ -46,6 +46,7 @@ type mode int
 const (
 	modeBrowse mode = iota
 	modeConfirmDelete
+	modeConfirmState // space on a project: leaving active hides it, so ask first
 	modeForm
 )
 
@@ -291,6 +292,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.mode {
 		case modeConfirmDelete:
 			return m.updateConfirm(msg)
+		case modeConfirmState:
+			return m.updateConfirmState(msg)
 		case modeForm:
 			return m.updateForm(msg)
 		}
@@ -574,14 +577,26 @@ func (m *model) advance() {
 		}
 	case rowProject:
 		next := nextState(r.project.Project.State)
-		if err := m.store.MarkProject(m.ctx, r.project.Project.ID, next); err != nil {
-			m.err = err
+		if next != task.Active {
+			// A done or shelved project is hidden with everything in it,
+			// which is too much to do on one stray keypress.
+			m.mode = modeConfirmState
 			return
 		}
-		m.status = fmt.Sprintf("project #%d %s", r.project.Project.ID, next)
-		if next != task.Active {
-			m.status += m.hiddenHint()
-		}
+		m.setProjectState(r.project.Project.ID, next)
+		return
+	}
+	m.err = m.reload()
+}
+
+func (m *model) setProjectState(id int64, next task.State) {
+	if err := m.store.MarkProject(m.ctx, id, next); err != nil {
+		m.err = err
+		return
+	}
+	m.status = fmt.Sprintf("project #%d %s", id, next)
+	if next != task.Active {
+		m.status += m.hiddenHint()
 	}
 	m.err = m.reload()
 }
@@ -670,6 +685,18 @@ func (m *model) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.status = fmt.Sprintf("deleted %s", r.target().label())
 		m.err = m.reload()
+	default:
+		m.status = "kept"
+	}
+	return m, nil
+}
+
+func (m *model) updateConfirmState(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	r, _ := m.selected()
+	m.mode = modeBrowse
+	switch msg.String() {
+	case "y", "Y":
+		m.setProjectState(r.project.Project.ID, nextState(r.project.Project.State))
 	default:
 		m.status = "kept"
 	}
@@ -992,6 +1019,14 @@ func (m *model) viewStatus() string {
 		default:
 			return errStyle.Render(fmt.Sprintf("delete subtask #%d %q? y/N", r.subtask.ID, r.subtask.Title))
 		}
+	case m.mode == modeConfirmState:
+		r, _ := m.selected()
+		p := r.project.Project
+		verb := "mark done"
+		if nextState(p.State) == task.Shelved {
+			verb = "shelve"
+		}
+		return errStyle.Render(fmt.Sprintf("%s project #%d %q and hide it with every task in it? y/N", verb, p.ID, p.Name))
 	}
 	return m.status
 }

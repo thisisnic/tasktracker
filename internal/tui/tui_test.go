@@ -293,13 +293,30 @@ func TestSpaceAdvances(t *testing.T) {
 	if tk, _ := store.GetTask(ctx, 1); tk.Status != task.Finished {
 		t.Errorf("ticking changed the task: %s", tk.Status)
 	}
-	press(m, "g", "space") // project: active -> done
-	if p, _ := store.GetProject(ctx, 1); p.State != task.Done {
-		t.Errorf("space on project: %s", p.State)
+	// A project leaving active is hidden with every task in it, so space
+	// asks first; anything but y keeps it as it is.
+	press(m, "g", "space")
+	if m.mode != modeConfirmState || !strings.Contains(plain(m), `mark done project #1 "house" and hide it`) {
+		t.Fatalf("space on project: mode=%v\n%s", m.mode, plain(m))
 	}
-	press(m, "space", "space")
-	if p, _ := store.GetProject(ctx, 1); p.State != task.Active {
-		t.Errorf("project did not cycle back to active: %s", p.State)
+	press(m, "n")
+	if p, _ := store.GetProject(ctx, 1); p.State != task.Active || m.mode != modeBrowse || m.status != "kept" {
+		t.Errorf("declined: state=%s mode=%v status=%q", p.State, m.mode, m.status)
+	}
+	press(m, "space", "y")
+	if p, _ := store.GetProject(ctx, 1); p.State != task.Done {
+		t.Errorf("confirmed: %s", p.State)
+	}
+	if r, _ := m.selected(); r.target() != (target{rowProject, 1}) || !strings.Contains(m.status, "project #1 done") {
+		t.Errorf("after done: selected=%v status=%q", r.target(), m.status)
+	}
+	press(m, "space")
+	if m.mode != modeConfirmState || !strings.Contains(plain(m), `shelve project #1 "house"`) {
+		t.Errorf("space on done project: mode=%v", m.mode)
+	}
+	press(m, "y", "space") // shelved -> active goes straight through
+	if p, _ := store.GetProject(ctx, 1); p.State != task.Active || m.mode != modeBrowse {
+		t.Errorf("project did not cycle back to active: %s mode=%v", p.State, m.mode)
 	}
 }
 
