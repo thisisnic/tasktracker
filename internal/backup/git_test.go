@@ -13,8 +13,6 @@ import (
 	"github.com/thisisnic/tasktracker/internal/task"
 )
 
-// gitRepos makes a bare "remote" and a clone of it at dir, with an
-// upstream set, so Push has somewhere to go.
 // isolateGit keeps the developer's git config and identity out of the test.
 func isolateGit(t *testing.T) {
 	t.Helper()
@@ -26,6 +24,8 @@ func isolateGit(t *testing.T) {
 	t.Setenv("GIT_COMMITTER_EMAIL", "t@t")
 }
 
+// gitRepos makes a bare "remote" and a clone of it at dir, with an
+// upstream set, so Push has somewhere to go.
 func gitRepos(t *testing.T, dir string) (remote string) {
 	t.Helper()
 	isolateGit(t)
@@ -197,6 +197,8 @@ func TestPushErrorHints(t *testing.T) {
 		"Updates were rejected because the remote contains work; fetch first": "git pull",
 		"! [remote rejected] main -> main (pre-receive hook declined)":        "",
 		"fatal: 'origin' does not appear to be a git repository":              "no origin remote",
+		"fatal: '/x/remote.git' does not appear to be a git repository":       "cannot be reached",
+		"fatal: Could not read from remote repository.":                       "cannot be reached",
 	}
 	for msg, hint := range cases {
 		err := pushError(context.Background(), errors.New(msg))
@@ -204,10 +206,10 @@ func TestPushErrorHints(t *testing.T) {
 			t.Errorf("%q: not ErrPushFailed", msg)
 		}
 		if hint == "" {
-			if strings.Contains(err.Error(), "git pull") || strings.Contains(err.Error(), "no origin") {
+			if strings.Contains(err.Error(), "git pull") || strings.Contains(err.Error(), "no origin") || strings.Contains(err.Error(), "cannot be reached") {
 				t.Errorf("%q: got a hint that does not apply: %v", msg, err)
 			}
-		} else if !strings.Contains(err.Error(), hint) {
+		} else if !strings.Contains(err.Error(), hint) || (hint == "cannot be reached" && strings.Contains(err.Error(), "no origin")) {
 			t.Errorf("%q: want hint %q, got %v", msg, hint, err)
 		}
 	}

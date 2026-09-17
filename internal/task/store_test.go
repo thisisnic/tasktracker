@@ -291,6 +291,7 @@ func TestTree(t *testing.T) {
 	addTask(t, s, NewTask{ProjectID: q.ID, Title: "three"})
 	addSubtask(t, s, t1.ID, "x")
 	addSubtask(t, s, t1.ID, "y")
+	addSubtask(t, s, t2.ID, "under the dropped task")
 
 	tree, err := s.Tree(ctx, false)
 	if err != nil {
@@ -315,6 +316,9 @@ func TestTree(t *testing.T) {
 	}
 	if len(all) != 3 || len(all[0].Tasks) != 2 || len(all[1].Tasks) != 1 {
 		t.Errorf("full tree = %+v", all)
+	}
+	if len(all[0].Tasks[1].Subtasks) != 1 {
+		t.Errorf("subtask under the dropped task missing from the full tree: %+v", all[0].Tasks[1])
 	}
 }
 

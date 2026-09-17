@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -93,8 +94,10 @@ func Open(path string, opts ...Option) (*Store, error) {
 	}
 	// The pragmas ride on the DSN so that every connection the pool opens
 	// gets them, not just the first. Cascading deletes depend on
-	// foreign_keys being on.
-	db, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	// foreign_keys being on. The path is escaped as a file: URI so a ? in
+	// it cannot be taken for the start of the parameters.
+	u := url.URL{Path: filepath.ToSlash(path)}
+	db, err := sql.Open("sqlite", "file:"+u.EscapedPath()+"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, err
 	}

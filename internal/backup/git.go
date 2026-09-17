@@ -118,8 +118,10 @@ func pushError(ctx context.Context, err error) error {
 	switch {
 	case strings.Contains(msg, "non-fast-forward") || strings.Contains(msg, "fetch first"):
 		return fmt.Errorf("%w: the remote has newer commits, perhaps a backup from another machine; run git pull in the backup folder and pick which tasktracker.db.age to keep: %v", ErrPushFailed, err)
-	case strings.Contains(msg, "does not appear to be a git repository") || strings.Contains(msg, "No such remote") || strings.Contains(msg, "'origin' does not appear"):
+	case strings.Contains(msg, "No such remote") || strings.Contains(msg, "'origin' does not appear"):
 		return fmt.Errorf("%w: the backup folder has no origin remote: %v", ErrPushFailed, err)
+	case strings.Contains(msg, "does not appear to be a git repository") || strings.Contains(msg, "Could not read from remote"):
+		return fmt.Errorf("%w: the origin remote cannot be reached; check the remote URL and credentials: %v", ErrPushFailed, err)
 	}
 	return fmt.Errorf("%w: %v", ErrPushFailed, err)
 }

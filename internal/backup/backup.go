@@ -267,6 +267,24 @@ var sidecars = []string{"-wal", "-shm"}
 // rename is os.Rename, swapped out by tests to make a step of Restore fail.
 var rename = os.Rename
 
+// writeSynced writes data to a new owner-only file and syncs it, so a crash
+// right after the rename that follows cannot leave the file truncated.
+func writeSynced(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
 // Restore replaces the database at dbPath with the decrypted backup. The
 // current database, if any, is kept beside it as dbPath + ".bak", or a
 // timestamped .bak when one already exists, together with its WAL files so
@@ -281,7 +299,7 @@ func Restore(backupFile, identityFile, dbPath string, now time.Time) (kept strin
 		return "", err
 	}
 	tmp := dbPath + ".restore-tmp"
-	if err := os.WriteFile(tmp, plain, 0o600); err != nil {
+	if err := writeSynced(tmp, plain); err != nil {
 		return "", err
 	}
 
