@@ -1,15 +1,16 @@
 // Package tui is the terminal UI for tasktracker, built on Bubble Tea v2.
 //
-// The left pane is a tree of areas, projects, tasks and subtasks, or a flat
-// list of tasks with due dates. A project in the tree can be collapsed to
-// hide its tasks, and an area to hide everything in it. The right pane
-// shows the selected item. Forms for adding and editing take over both
-// panes.
+// The left pane lists tasks one of two ways: by project, as a tree of
+// areas, projects, tasks and subtasks, or by deadline, as one list of
+// tasks soonest due first. A project in the tree can be collapsed to hide
+// its tasks, and an area to hide everything in it. The right pane shows
+// the selected item. Forms for adding and editing take over both panes.
 package tui
 
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,7 +32,7 @@ type Options struct {
 	ShowFinished bool
 }
 
-// Run opens the tree view and blocks until the user quits.
+// Run opens the by-project view and blocks until the user quits.
 func Run(ctx context.Context, store *task.Store, opts Options) error {
 	m := newModel(ctx, store, opts.Goals)
 	m.showAll = opts.ShowFinished
@@ -51,12 +52,21 @@ const (
 	modeForm
 )
 
+// viewKind is how the left pane is arranged: by project, as a tree, or by
+// deadline, as one list of tasks.
 type viewKind int
 
 const (
 	viewTree viewKind = iota
-	viewDue
+	viewDeadline
 )
+
+func (v viewKind) String() string {
+	if v == viewDeadline {
+		return "by deadline"
+	}
+	return "by project"
+}
 
 // rowKind says what a row in the left pane stands for.
 type rowKind int
@@ -115,7 +125,7 @@ type model struct {
 	width   int
 	height  int
 	showAll bool     // show archived tasks and finished projects
-	view    viewKind // tree or due
+	view    viewKind // by project or by deadline
 	// collapsed holds the areas and projects whose contents are hidden in
 	// the tree. It is kept across reloads, so a fold survives edits.
 	collapsed map[target]bool
@@ -155,8 +165,17 @@ func (m *model) reload() error {
 		return err
 	}
 	m.rebuildRows()
-	if keep != nil {
-		m.selectTarget(*keep)
+	if keep != nil && !m.selectTarget(*keep) {
+		// The row is still there but folded away, as when switching back
+		// to by project from a task inside a folded project: land on the
+		// nearest container that is listed, innermost first. A row that is
+		// gone altogether has no containers, and the cursor stays put.
+		cs := m.containers(*keep)
+		for i := len(cs) - 1; i >= 0; i-- {
+			if m.selectTarget(cs[i]) {
+				break
+			}
+		}
 	}
 	if m.cursor >= len(m.rows) {
 		m.cursor = max(0, len(m.rows)-1)
@@ -192,38 +211,33 @@ func (m *model) pruneFolds() error {
 	return nil
 }
 
-// rebuildRows flattens the tree for the current view. The tree view lists
-// an area's areas, then its projects, each indented one step deeper, and
-// skips what is inside a collapsed area or project. The due view lists open tasks
-// with a due date, soonest first, with no area or project rows.
+// rebuildRows flattens the outline for the current view. By project, the
+// rows are an area's areas, then its projects, each indented one step
+// deeper, skipping what is inside a collapsed area or project. By
+// deadline, the rows are every task with its subtasks under it, with no
+// area or project rows, soonest due first and undated tasks last.
 func (m *model) rebuildRows() {
 	m.rows = m.rows[:0]
+	if m.view == viewDeadline {
+		m.rows = append(m.rows, m.deadlineRows()...)
+		return
+	}
 	areas, projects := m.outline.Areas, m.outline.Projects
 	var walk func(areas []task.AreaNode, projects []task.ProjectNode, depth int)
 	walk = func(areas []task.AreaNode, projects []task.ProjectNode, depth int) {
 		for _, a := range areas {
-			if m.view == viewTree {
-				m.rows = append(m.rows, row{kind: rowArea, depth: depth, area: a})
-				if m.collapsed[target{rowArea, a.Area.ID}] {
-					continue
-				}
+			m.rows = append(m.rows, row{kind: rowArea, depth: depth, area: a})
+			if m.collapsed[target{rowArea, a.Area.ID}] {
+				continue
 			}
 			walk(a.Areas, a.Projects, depth+1)
 		}
 		for _, p := range projects {
-			if m.view == viewTree {
-				m.rows = append(m.rows, row{kind: rowProject, depth: depth, project: p})
-				if m.collapsed[target{rowProject, p.Project.ID}] {
-					continue
-				}
+			m.rows = append(m.rows, row{kind: rowProject, depth: depth, project: p})
+			if m.collapsed[target{rowProject, p.Project.ID}] {
+				continue
 			}
 			for _, t := range p.Tasks {
-				if m.view == viewDue {
-					if t.Task.Due != "" && t.Task.Open() {
-						m.rows = append(m.rows, row{kind: rowTask, project: p, task: t})
-					}
-					continue
-				}
 				m.rows = append(m.rows, row{kind: rowTask, depth: depth, project: p, task: t})
 				for _, s := range t.Subtasks {
 					m.rows = append(m.rows, row{kind: rowSubtask, depth: depth, project: p, task: t, subtask: s})
@@ -232,18 +246,45 @@ func (m *model) rebuildRows() {
 		}
 	}
 	walk(areas, projects, 0)
-	if m.view == viewDue {
-		sortRowsByDue(m.rows)
-	}
 }
 
-func sortRowsByDue(rows []row) {
-	// Insertion sort keeps it dependency-free and stable; the list is short.
-	for i := 1; i < len(rows); i++ {
-		for j := i; j > 0 && rows[j].task.Task.Due < rows[j-1].task.Task.Due; j-- {
-			rows[j], rows[j-1] = rows[j-1], rows[j]
+// deadlineRows lists every task in the outline with its subtasks, ordered
+// by due date with undated tasks last. Tasks due the same day, and undated
+// ones, keep their by-project order, so the list is stable across reloads.
+func (m *model) deadlineRows() []row {
+	type group struct {
+		due  string
+		rows []row
+	}
+	var groups []group
+	var walk func(areas []task.AreaNode, projects []task.ProjectNode)
+	walk = func(areas []task.AreaNode, projects []task.ProjectNode) {
+		for _, a := range areas {
+			walk(a.Areas, a.Projects)
+		}
+		for _, p := range projects {
+			for _, t := range p.Tasks {
+				g := group{due: t.Task.Due, rows: []row{{kind: rowTask, project: p, task: t}}}
+				for _, s := range t.Subtasks {
+					g.rows = append(g.rows, row{kind: rowSubtask, project: p, task: t, subtask: s})
+				}
+				groups = append(groups, g)
+			}
 		}
 	}
+	walk(m.outline.Areas, m.outline.Projects)
+	sort.SliceStable(groups, func(i, j int) bool {
+		a, b := groups[i].due, groups[j].due
+		if a == "" || b == "" {
+			return a != "" && b == ""
+		}
+		return a < b
+	})
+	var rows []row
+	for _, g := range groups {
+		rows = append(rows, g.rows...)
+	}
+	return rows
 }
 
 func (r row) target() target {
@@ -270,15 +311,17 @@ func (r row) areaOf() int64 {
 // areaPath names an area by its ancestry, or "" for none.
 func (m *model) areaPath(id int64) string { return task.AreaPath(m.areas, id) }
 
-// selectTarget moves the cursor to the row for t. When t is gone, for
-// instance because it was just hidden, the cursor stays where it is.
-func (m *model) selectTarget(t target) {
+// selectTarget moves the cursor to the row for t and reports whether it
+// found one. When t is gone, for instance because it was just hidden, the
+// cursor stays where it is.
+func (m *model) selectTarget(t target) bool {
 	for i, r := range m.rows {
 		if r.target() == t {
 			m.cursor = i
-			return
+			return true
 		}
 	}
+	return false
 }
 
 func (m *model) selected() (row, bool) {
@@ -397,6 +440,10 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	m.reveal(t)
 	m.status = fmt.Sprintf("saved %s", t.label())
+	if m.view == viewDeadline && (t.kind == rowArea || t.kind == rowProject) {
+		// Areas and projects have no row by deadline, so say where it went.
+		m.status += " (v shows it by project)"
+	}
 	return m, nil
 }
 
@@ -443,14 +490,18 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.status = "hiding archived tasks and finished projects"
 		}
 	case "v":
+		from, _ := m.selected()
 		if m.view == viewTree {
-			m.view = viewDue
-			m.status = "due: open tasks with a due date, soonest first"
+			m.view = viewDeadline
+			m.status = "by deadline: every task, soonest due first, undated last"
 		} else {
 			m.view = viewTree
-			m.status = "tree"
+			m.status = "by project"
 		}
 		m.err = m.reload()
+		if m.view == viewDeadline {
+			m.landByDeadline(from)
+		}
 	case "left", "right":
 		m.toggleFold()
 	case "space", " ", "enter":
@@ -470,7 +521,11 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "a":
 		r, ok := m.selected()
 		if !ok {
-			m.status = "add a project first: press A"
+			if m.view == viewDeadline {
+				m.status = "no task to add under; v goes back to by project, where a adds one under a project"
+			} else {
+				m.status = "add a project first: press A"
+			}
 			return m, nil
 		}
 		if r.kind == rowArea {
@@ -508,6 +563,38 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// landByDeadline moves the cursor after switching to by deadline from an
+// area or project row, which has no row there: to the first task listed
+// from inside it, or to the top when it holds none. From a task or
+// subtask the cursor is already on the same row.
+func (m *model) landByDeadline(from row) {
+	within := map[int64]bool{}
+	switch from.kind {
+	case rowProject:
+		within[from.project.Project.ID] = true
+	case rowArea:
+		var walk func(n task.AreaNode)
+		walk = func(n task.AreaNode) {
+			for _, p := range n.Projects {
+				within[p.Project.ID] = true
+			}
+			for _, a := range n.Areas {
+				walk(a)
+			}
+		}
+		walk(from.area)
+	default:
+		return
+	}
+	for i, r := range m.rows {
+		if within[r.project.Project.ID] {
+			m.cursor = i
+			return
+		}
+	}
+	m.cursor = 0
+}
+
 // areaHere is the area a new area or project goes in by default: the
 // selected row's area, or the top when nothing is selected.
 func (m *model) areaHere() int64 {
@@ -538,8 +625,8 @@ func (m *model) toggleFold() {
 	if !ok {
 		return
 	}
-	if m.view == viewDue {
-		m.status = "the due list is flat; v goes back to the tree"
+	if m.view == viewDeadline {
+		m.status = "folding is for the by-project view; v goes back to it"
 		return
 	}
 	var (
@@ -578,8 +665,13 @@ func (m *model) toggleFold() {
 }
 
 // reveal selects t, first expanding every collapsed area and project
-// around it, so a row folded away can still be shown.
+// around it, so a row folded away can still be shown. By deadline nothing
+// is folded away, so the tree's folds are left as they are.
 func (m *model) reveal(t target) {
+	if m.view == viewDeadline {
+		m.selectTarget(t)
+		return
+	}
 	changed := false
 	for _, c := range m.containers(t) {
 		if m.collapsed[c] {
@@ -790,24 +882,14 @@ func (m *model) archive() {
 	m.err = m.reload()
 }
 
-// finishedHint follows a task being done or dropped: it stays in the tree
-// until archived, but the due view only lists open tasks, so there it is
-// gone.
-func (m *model) finishedHint() string {
-	if m.view == viewDue {
-		return " (gone from the due list)"
-	}
-	return "; z archives it"
-}
+// finishedHint follows a task being done or dropped: it stays listed
+// until archived.
+func (m *model) finishedHint() string { return "; z archives it" }
 
 // hiddenHint explains where something just put out of sight went: what
-// is "archived" for a task or "finished" for a project. The due view only
-// ever lists open tasks, so there f would not bring it back.
+// is "archived" for a task or "finished" for a project.
 func (m *model) hiddenHint(what string) string {
-	switch {
-	case m.view == viewDue:
-		return " (gone from the due list)"
-	case !m.showAll:
+	if !m.showAll {
 		return " (hidden; f shows " + what + ")"
 	}
 	return ""
@@ -878,11 +960,7 @@ func (m *model) View() tea.View {
 	right := paneStyle.Width(detailW).Height(bodyH).Render(clipLines(m.viewDetail(detailW-4, bodyH-2), bodyH-2))
 
 	var b strings.Builder
-	title := "tasktracker · tree"
-	if m.view == viewDue {
-		title = "tasktracker · due"
-	}
-	head := titleStyle.Render(title)
+	head := titleStyle.Render("tasktracker · " + m.view.String())
 	if m.showAll {
 		head += dimStyle.Render(" · showing archived")
 	}
@@ -917,8 +995,8 @@ func clipLines(s string, h int) string {
 func (m *model) viewList(w, h int) string {
 	if len(m.rows) == 0 {
 		switch {
-		case m.view == viewDue:
-			return dimStyle.Render("nothing due\n\nv goes back to the tree")
+		case m.view == viewDeadline:
+			return dimStyle.Render("no tasks\n\nv goes back to by project")
 		case !m.showAll:
 			return dimStyle.Render("no projects yet\n\nA adds one; f shows finished projects")
 		default:
@@ -952,7 +1030,7 @@ func statusGlyph(s task.Status) string {
 // viewRow renders one row as a line of width w. The row is built as plain
 // text first so width and truncation are measured without escape codes,
 // then styled: finished things are dimmed as a whole, an overdue date is
-// red, and in the due view the project name is dimmed after the title.
+// red, and by deadline the project name is dimmed after the title.
 func (m *model) viewRow(r row, selected bool, w int) string {
 	var left, right, suffix string
 	finished := false
@@ -976,7 +1054,7 @@ func (m *model) viewRow(r row, selected bool, w int) string {
 	case rowTask:
 		t := r.task.Task
 		indent += "  "
-		if m.view == viewDue {
+		if m.view == viewDeadline {
 			indent = ""
 			suffix = "  " + r.project.Project.Name
 		}
@@ -998,7 +1076,11 @@ func (m *model) viewRow(r row, selected bool, w int) string {
 		if r.subtask.Done {
 			box = "[x]"
 		}
-		left = fmt.Sprintf("%s    %s %s", indent, box, r.subtask.Title)
+		indent += "    "
+		if m.view == viewDeadline {
+			indent = "  "
+		}
+		left = fmt.Sprintf("%s%s %s", indent, box, r.subtask.Title)
 	}
 	line := fit(left+suffix, right, w)
 	switch {
@@ -1205,5 +1287,9 @@ func (m *model) helpLine() string {
 	if m.mode == modeForm && m.form != nil {
 		return m.form.help()
 	}
-	return "n area · A project · a task · s subtask · e edit · space next status/tick · x drop · z archive · d delete · f show archived · v due · ←/→ fold/unfold · j/k move · q quit"
+	keys := "n area · A project · a task · s subtask · e edit · space next status/tick · x drop · z archive · d delete · f show archived"
+	if m.view == viewDeadline {
+		return keys + " · v by project · j/k move · q quit"
+	}
+	return keys + " · v by deadline · ←/→ fold/unfold · j/k move · q quit"
 }

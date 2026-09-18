@@ -13,7 +13,7 @@ point at the goals it serves in [goaltracker](https://github.com/thisisnic/goalt
 One binary, one SQLite file, no account.
 
 ```text
-tasktracker · tree
+tasktracker · by project
 ╭─────────────────────────────────────────────────────╮╭───────────────────────────────────────────╮
 │ house                                        2 open ││ paint the hall                            │
 │   ○ paint the hall                  1/2  2026-09-10 ││ project house                             │
@@ -24,7 +24,7 @@ tasktracker · tree
 │   ○ email accountant                                ││   [x] buy paint                           │
 │                                                     ││   [ ] move furniture                      │
 ╰─────────────────────────────────────────────────────╯╰───────────────────────────────────────────╯
-n area · A project · a task · s subtask · e edit · space next status/tick · x drop · z archive · d delete · f show archived · v due · ←/→ fold/unfold · j/k move · q quit
+n area · A project · a task · s subtask · e edit · space next status/tick · x drop · z archive · d delete · f show archived · v by deadline · ←/→ fold/unfold · j/k move · q quit
 ```
 
 ## How It Works
@@ -59,9 +59,9 @@ tasktracker                      # open the terminal UI
 In the UI: `n` add an area, `A` add a project, `a` add a task, `s` add a
 subtask, `e` edit, `space` step a task's status or tick a subtask, `x` drop
 a task or shelve a project, `z` archive a finished task or bring it back,
-`d` delete, `f` show archived tasks and finished projects, `v` switch to
-the due list, `←`/`→` fold or unfold an area or project, `j`/`k` move, `q`
-quit.
+`d` delete, `f` show archived tasks and finished projects, `v` switch
+between the by-project tree and the by-deadline list, `←`/`→` fold or
+unfold an area or project, `j`/`k` move, `q` quit.
 On a project, `space` steps active → done → shelved, but asks `y/N` before
 leaving active, since a done or shelved project is hidden with every task
 in it.
@@ -91,8 +91,9 @@ tasktracker task list --due --json
 - **Folding** - `←` or `→` on a project hides its tasks, and on an area
   hides everything in it, behind a `▸` that keeps the open count; press it
   again to show them. Folds last until you quit.
-- **Due list** - Press `v` for every open task with a due date, soonest
-  first, overdue ones in red.
+- **By project or by deadline** - The tree groups tasks under their
+  projects. Press `v` for the same tasks as one list, soonest due first
+  with undated ones last and overdue dates in red; `v` again goes back.
 - **Archive, don't lose** - A done or dropped task stays in the tree,
   greyed, until you press `z` to archive it. `f` shows the archive, and
   `z` there brings a task back; so does reopening it.

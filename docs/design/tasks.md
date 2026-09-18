@@ -116,8 +116,13 @@ Layout, to be adjusted as it gets used:
 - A tree pane: areas, then projects as headers, their tasks indented under
   them, and subtasks under tasks with a tick box. A detail pane for the
   selected item.
-- A due view that lists open tasks with a due date, soonest first, overdue
-  ones marked.
+- The same pane arranged by deadline: every task as one list, soonest due
+  first, undated tasks last, subtasks still under their task and the
+  project name after the title. One key switches between the two, so
+  the tree answers "what is there to do on this" and the list answers
+  "what is due next". The list first held only open tasks with a due
+  date; it now holds everything the tree does, so switching never loses
+  a task from view.
 - Finished tasks stay in the tree, greyed, until archived. Archived tasks
   and finished projects (done or shelved) are hidden by default and shown
   with a toggle, so the tree stays short.
@@ -125,7 +130,8 @@ Layout, to be adjusted as it gets used:
 ## Open questions
 
 1. **Day to day.** What to see first when opening the app. The tree opens
-   first and the due view is one key away, until using it says otherwise.
+   first and the by-deadline list is one key away, until using it says
+   otherwise.
 2. **Tasks without a project.** For now every task needs a project; a
    catch-all project is one way round it if that turns out to be annoying.
 3. **What "done" means for a project.** Whether a project can be marked

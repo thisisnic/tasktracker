@@ -222,7 +222,7 @@ func TestTreeRowsAndView(t *testing.T) {
 		t.Fatalf("rows = %v\nwant   %v", got, want)
 	}
 	view := plain(m)
-	for _, want := range []string{"tasktracker · tree", "house", "2 open", "fix it up", "#3", "paint the hall", "1/2", "2026-09-10", "[x] buy paint", "[ ] move furniture"} {
+	for _, want := range []string{"tasktracker · by project", "house", "2 open", "fix it up", "#3", "paint the hall", "1/2", "2026-09-10", "[x] buy paint", "[ ] move furniture"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q", want)
 		}
@@ -422,30 +422,100 @@ func TestArchive(t *testing.T) {
 	}
 }
 
-func TestDueView(t *testing.T) {
-	m, _ := setup(t, nil)
+func TestDeadlineView(t *testing.T) {
+	m, store := setup(t, nil)
+	ctx := context.Background()
 	press(m, "v")
-	if m.view != viewDue {
-		t.Fatal("v did not switch to the due view")
+	if m.view != viewDeadline || !strings.Contains(m.status, "by deadline") {
+		t.Fatalf("v did not switch to the deadline view: view=%v status=%q", m.view, m.status)
 	}
-	if got := labels(m); !reflect.DeepEqual(got, []string{"T:paint the hall", "T:fix the gate"}) {
-		t.Errorf("due rows = %v", got)
+	// Every task, soonest due first, undated last, subtasks under their task.
+	want := []string{"T:paint the hall", "S:buy paint", "S:move furniture", "T:fix the gate", "T:email accountant"}
+	if got := labels(m); !reflect.DeepEqual(got, want) {
+		t.Errorf("deadline rows = %v\nwant   %v", got, want)
 	}
 	view := plain(m)
-	if !strings.Contains(view, "tasktracker · due") || !strings.Contains(view, "house") {
-		t.Errorf("due view:\n%s", view)
+	for _, want := range []string{"tasktracker · by deadline", "paint the hall  house", "  [x] buy paint", "v by project"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("deadline view missing %q:\n%s", want, view)
+		}
 	}
-	press(m, "space", "space") // paint the hall -> done, leaves the list
-	if got := labels(m); !reflect.DeepEqual(got, []string{"T:fix the gate"}) {
-		t.Errorf("after finishing: %v", got)
+	if strings.Contains(view, "fold") {
+		t.Errorf("help by deadline offers folding:\n%s", view)
 	}
+	press(m, "left")
+	if !strings.Contains(m.status, "v goes back") {
+		t.Errorf("fold in the deadline view: %q", m.status)
+	}
+	// A finished task stays, greyed, until archived; archiving hides it.
 	press(m, "space", "space")
-	if len(m.rows) != 0 || !strings.Contains(plain(m), "nothing due") {
-		t.Errorf("empty due view: rows=%d", len(m.rows))
+	if got := labels(m); !reflect.DeepEqual(got, want) || !strings.Contains(m.status, "z archives it") {
+		t.Errorf("after finishing: rows=%v status=%q", got, m.status)
+	}
+	press(m, "z")
+	if got := labels(m); !reflect.DeepEqual(got, []string{"T:fix the gate", "T:email accountant"}) || !strings.Contains(m.status, "f shows archived") {
+		t.Errorf("after archiving: rows=%v status=%q", got, m.status)
+	}
+	// A date change moves a task; an undated one goes to the end.
+	later := "2026-12-01"
+	if _, err := store.UpdateTask(ctx, 2, task.TaskEdit{Due: &later}); err != nil {
+		t.Fatal(err)
+	}
+	today := "2026-09-17"
+	if _, err := store.UpdateTask(ctx, 3, task.TaskEdit{Due: &today}); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "r")
+	if got := labels(m); !reflect.DeepEqual(got, []string{"T:email accountant", "T:fix the gate"}) {
+		t.Errorf("after date changes: %v", got)
+	}
+	press(m, "f") // the archived task, dated 2026-09-10, comes first
+	if got := labels(m); got[0] != "T:paint the hall" {
+		t.Errorf("with archived shown: %v", got)
+	}
+	// Saving by deadline leaves the tree's folds alone: fold house first.
+	m.collapsed[target{rowProject, 1}] = true
+	press(m, "f", "G", "a") // a adds under the selected task's project
+	if m.mode != modeForm {
+		t.Fatal("a did not open the form in the deadline view")
+	}
+	typeText(m, "sooner")
+	press(m, "enter", "enter", "enter")
+	if m.mode != modeBrowse || m.err != nil {
+		t.Fatalf("form: mode=%v err=%v", m.mode, m.err)
+	}
+	if r, _ := m.selected(); r.kind != rowTask || r.task.Task.Title != "sooner" || r.project.Project.Name != "house" || m.cursor != len(m.rows)-1 {
+		t.Errorf("new undated task: %v at %d of %d", r.target(), m.cursor, len(m.rows))
+	}
+	if !m.collapsed[target{rowProject, 1}] {
+		t.Error("saving by deadline unfolded house in the tree")
 	}
 	press(m, "v")
-	if m.view != viewTree || len(m.rows) == 0 {
-		t.Error("v did not go back to the tree")
+	if got := labels(m); !reflect.DeepEqual(got, []string{"P:house", "P:work", "T:email accountant"}) {
+		t.Errorf("tree after saving by deadline: %v", got)
+	}
+	// The selected task is folded away, so the cursor lands on its project.
+	if r, _ := m.selected(); r.target() != (target{rowProject, 1}) {
+		t.Errorf("cursor after v onto a folded project: %v", r.target())
+	}
+	press(m, "v")
+	delete(m.collapsed, target{rowProject, 1})
+	for _, id := range []int64{2, 3, 4} {
+		if err := store.DeleteTask(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	press(m, "r")
+	if len(m.rows) != 0 || !strings.Contains(plain(m), "no tasks") {
+		t.Errorf("empty deadline view: rows=%d\n%s", len(m.rows), plain(m))
+	}
+	press(m, "a")
+	if m.mode != modeBrowse || !strings.Contains(m.status, "v goes back") {
+		t.Errorf("a with nothing listed: mode=%v status=%q", m.mode, m.status)
+	}
+	press(m, "v")
+	if m.view != viewTree || len(m.rows) == 0 || m.status != "by project" {
+		t.Errorf("v did not go back: view=%v rows=%d status=%q", m.view, len(m.rows), m.status)
 	}
 }
 
@@ -564,9 +634,87 @@ func TestFormStaysOpenWhenSaveFails(t *testing.T) {
 	}
 }
 
-func TestDueViewRowStyling(t *testing.T) {
+// TestDeadlineOrder checks that tasks due the same day, and undated
+// tasks, keep their by-project order, across nested areas.
+func TestDeadlineOrder(t *testing.T) {
+	m, store := setup(t, nil)
+	ctx := context.Background()
+	home, err := store.AddArea(ctx, task.NewArea{Name: "home"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	garden, err := store.AddArea(ctx, task.NewArea{Name: "garden", ParentID: home.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beds, err := store.AddProject(ctx, task.NewProject{Name: "beds", AreaID: garden.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shed, err := store.AddProject(ctx, task.NewProject{Name: "shed", AreaID: home.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, in := range []task.NewTask{
+		{ProjectID: beds.ID, Title: "weed", Due: "2026-09-20"}, // same day as fix the gate
+		{ProjectID: beds.ID, Title: "mulch"},                   // undated
+		{ProjectID: shed.ID, Title: "clear out", Due: "2026-09-20"},
+		{ProjectID: shed.ID, Title: "paint shed"},
+	} {
+		if _, err := store.AddTask(ctx, in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	press(m, "r")
+	tree := labels(m)
+	press(m, "v")
+	// By project, areas come before top-level projects and garden (inside
+	// home) before shed; that order holds within a due date and among the
+	// undated.
+	want := []string{
+		"T:paint the hall", "S:buy paint", "S:move furniture", // 2026-09-10
+		"T:weed", "T:clear out", "T:fix the gate", // 2026-09-20, tree order
+		"T:mulch", "T:paint shed", "T:email accountant", // undated, tree order
+	}
+	if got := labels(m); !reflect.DeepEqual(got, want) {
+		t.Errorf("deadline rows = %v\nwant   %v\ntree   %v", got, want, tree)
+	}
+	// v from an area or project lands on the first task inside it, or at
+	// the top when it holds none.
+	press(m, "v")
+	m.selectTarget(target{rowArea, home.ID})
+	press(m, "v")
+	if r, _ := m.selected(); r.task.Task.Title != "weed" {
+		t.Errorf("v from home: %v", r.target())
+	}
+	press(m, "v")
+	m.selectTarget(target{rowProject, 2}) // work
+	press(m, "v")
+	if r, _ := m.selected(); r.task.Task.Title != "email accountant" {
+		t.Errorf("v from work: %v", r.target())
+	}
+	press(m, "v")
+	empty, err := store.AddProject(ctx, task.NewProject{Name: "empty"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	press(m, "r")
+	m.selectTarget(target{rowProject, empty.ID})
+	press(m, "v")
+	if m.cursor != 0 {
+		t.Errorf("v from an empty project: cursor %d", m.cursor)
+	}
+	press(m, "A") // a project saved by deadline has no row here
+	typeText(m, "fence")
+	press(m, "enter", "enter", "enter", "enter")
+	if m.mode != modeBrowse || m.err != nil || !strings.Contains(m.status, "saved project") || !strings.Contains(m.status, "v shows it by project") {
+		t.Errorf("A by deadline: mode=%v err=%v status=%q", m.mode, m.err, m.status)
+	}
+}
+
+func TestDeadlineViewRowStyling(t *testing.T) {
 	m, _ := setup(t, nil)
-	press(m, "v", "j") // fix the gate selected; paint the hall is overdue and unselected
+	press(m, "v", "j", "j", "j") // fix the gate selected; paint the hall is overdue and unselected
 	view := m.View().Content
 	lines := strings.Split(view, "\n")
 	var overdue, selected string
@@ -923,10 +1071,10 @@ func TestCollapse(t *testing.T) {
 		t.Errorf("left on an empty project: %q", m.status)
 	}
 
-	// The due list is flat.
+	// There is nothing to fold by deadline.
 	press(m, "v", "left")
-	if !strings.Contains(m.status, "flat") {
-		t.Errorf("left in the due view: %q", m.status)
+	if !strings.Contains(m.status, "v goes back") {
+		t.Errorf("left in the deadline view: %q", m.status)
 	}
 	press(m, "v")
 
