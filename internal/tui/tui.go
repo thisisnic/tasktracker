@@ -104,6 +104,8 @@ type editor interface {
 	Update(tea.Msg) (done bool, submitted bool, cmd tea.Cmd)
 	View() string
 	apply(*model) (target, error)
+	// saved is the status line after apply succeeded.
+	saved(target) string
 	filtering() bool
 	resize(width, height int)
 	help() string
@@ -431,6 +433,7 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = modeForm
 		return m, m.form.retry()
 	}
+	form := m.form
 	m.form = nil
 	// A project's goal links may have changed; look them up afresh.
 	delete(m.goalLabels, t.id)
@@ -439,7 +442,7 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.reveal(t)
-	m.status = fmt.Sprintf("saved %s", t.label())
+	m.status = form.saved(t)
 	if m.view == viewDeadline && (t.kind == rowArea || t.kind == rowProject) {
 		// Areas and projects have no row by deadline, so say where it went.
 		m.status += " (v shows it by project)"
@@ -540,6 +543,14 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, m.openEditor(newSubtaskForm(nil, r.task.Task, 0, 0))
+	case "c":
+		r, ok := m.selected()
+		if !ok || r.kind == rowArea || r.kind == rowProject {
+			m.status = "select a task to copy"
+			return m, nil
+		}
+		t := r.task.Task
+		return m, m.openEditor(newCopyForm(t, len(r.task.Subtasks), m.projectOptions(), m.now(), 0, 0))
 	case "e":
 		r, ok := m.selected()
 		if !ok {
@@ -1287,7 +1298,7 @@ func (m *model) helpLine() string {
 	if m.mode == modeForm && m.form != nil {
 		return m.form.help()
 	}
-	keys := "n area · A project · a task · s subtask · e edit · space next status/tick · x drop · z archive · d delete · f show archived"
+	keys := "n area · A project · a task · s subtask · c copy task · e edit · space next status/tick · x drop · z archive · d delete · f show archived"
 	if m.view == viewDeadline {
 		return keys + " · v by project · j/k move · q quit"
 	}

@@ -24,7 +24,7 @@ tasktracker · by project
 │   ○ email accountant                                ││   [x] buy paint                           │
 │                                                     ││   [ ] move furniture                      │
 ╰─────────────────────────────────────────────────────╯╰───────────────────────────────────────────╯
-n area · A project · a task · s subtask · e edit · space next status/tick · x drop · z archive · d delete · f show archived · v by deadline · ←/→ fold/unfold · j/k move · q quit
+n area · A project · a task · s subtask · c copy task · e edit · space next status/tick · x drop · z archive · d delete · f show archived · v by deadline · ←/→ fold/unfold · j/k move · q quit
 ```
 
 ## How It Works
@@ -57,7 +57,7 @@ tasktracker                      # open the terminal UI
 ```
 
 In the UI: `n` add an area, `A` add a project, `a` add a task, `s` add a
-subtask, `e` edit, `space` step a task's status or tick a subtask, `x` drop
+subtask, `c` copy a task, `e` edit, `space` step a task's status or tick a subtask, `x` drop
 a task or shelve a project, `z` archive a finished task or bring it back,
 `d` delete, `f` show archived tasks and finished projects, `v` switch
 between the by-project tree and the by-deadline list, `←`/`→` fold or
@@ -99,6 +99,10 @@ tasktracker task list --due --json
   `z` there brings a task back; so does reopening it.
 - **Checklists** - Subtasks are a title and a tick. The task's row shows
   how many are done.
+- **Copy a task** - `c` on a task opens the form filled in from it, for
+  work that looks like something already listed. Change what differs
+  and save; the copy starts as todo with the original's checklist,
+  unticked.
 - **Goal links** - A project stores the ids of the goaltracker goals it
   serves. tasktracker reads goaltracker's database read-only to show their
   statements, and offers them as a pick list in the project form. Without
@@ -203,6 +207,7 @@ tasktracker update            # install it
 | `tasktracker task list` | Show the tree of areas, projects and tasks; `--open`, `--all`, `--project`, `--status`, `--due`, `--json` |
 | `tasktracker task show ID` | One task with its subtasks; `--json` |
 | `tasktracker task edit ID` | Change title, due date or project; `--no-due` |
+| `tasktracker task copy ID` | New task from an existing one, subtasks included; `--title`, `--due`, `--no-due`, `--project`, `--json` |
 | `tasktracker task mark ID todo\|doing\|done\|dropped` | Set a task's status |
 | `tasktracker task archive ID` / `unarchive ID` | Put a finished task out of the tree, or bring it back |
 | `tasktracker task delete ID` | Delete a task and its subtasks; `--yes` |

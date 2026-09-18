@@ -70,6 +70,15 @@ something inside a fold unfolds the way to it.
 - No priority, estimate, notes or comments. Those are the issue-tracker
   parts left out until they are missed.
 
+### Copying
+
+Some tasks look like ones already listed: the same checklist, another
+date. A copy saves retyping them. The copy takes the original's title,
+due date and project, any of which can be changed on the way, starts as
+todo, and gets the original's subtasks unticked. The original is not
+touched. There is no link between the two afterwards; a copy is just a
+new task that started filled in.
+
 ### Archiving
 
 Finishing a task used to hide it. That lost the record of what had been

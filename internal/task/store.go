@@ -682,6 +682,82 @@ func (s *Store) UpdateTask(ctx context.Context, id int64, e TaskEdit) (Task, err
 	return s.GetTask(ctx, id)
 }
 
+// CopyTask makes a new task from an existing one, for work that looks
+// like something already listed. The copy takes the original's title, due
+// date and project, with any non-nil fields of e in their place, and
+// always starts as todo: a Status in e is an error. Its subtasks are
+// copied unticked. The new task and its subtasks are returned.
+func (s *Store) CopyTask(ctx context.Context, id int64, e TaskEdit) (TaskNode, error) {
+	// The overrides are checked first, so a bad one fails before anything
+	// is read or written.
+	var due string
+	if e.Due != nil {
+		var err error
+		if due, err = ParseDue(*e.Due, time.Now()); err != nil {
+			return TaskNode{}, err
+		}
+	}
+	if e.Title != nil && strings.TrimSpace(*e.Title) == "" {
+		return TaskNode{}, errors.New("title is required")
+	}
+	if e.Status != nil {
+		return TaskNode{}, errors.New("a copy always starts as todo")
+	}
+	if e.ProjectID != nil {
+		if _, err := s.GetProject(ctx, *e.ProjectID); err != nil {
+			return TaskNode{}, fmt.Errorf("project %d: %w", *e.ProjectID, err)
+		}
+	}
+	// The original is read inside the transaction, and its subtasks are
+	// copied by one insert from a select, so the copy matches the original
+	// as it is at that moment even with another process on the database.
+	var newID int64
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		from, err := scanTask(tx.QueryRowContext(ctx, selectTask+" WHERE id = ?", id))
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		t := Task{ProjectID: from.ProjectID, Title: from.Title, Status: Todo, Due: from.Due}
+		if e.Title != nil {
+			t.Title = strings.TrimSpace(*e.Title)
+		}
+		if e.Due != nil {
+			t.Due = due
+		}
+		if e.ProjectID != nil {
+			t.ProjectID = *e.ProjectID
+		}
+		res, err := tx.ExecContext(ctx, `INSERT INTO tasks (project_id, title, status, due, created_at) VALUES (?, ?, ?, ?, ?)`,
+			t.ProjectID, t.Title, string(t.Status), t.Due, now())
+		if err != nil {
+			return err
+		}
+		if newID, err = res.LastInsertId(); err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO subtasks (task_id, title, done, created_at) SELECT ?, title, 0, ? FROM subtasks WHERE task_id = ? ORDER BY id`, newID, now(), id)
+		return err
+	})
+	if err != nil {
+		return TaskNode{}, err
+	}
+	t, err := s.GetTask(ctx, newID)
+	if err != nil {
+		return TaskNode{}, err
+	}
+	copied, err := s.ListSubtasks(ctx, newID)
+	if err != nil {
+		return TaskNode{}, err
+	}
+	if copied == nil {
+		copied = []Subtask{}
+	}
+	return TaskNode{Task: t, Subtasks: copied}, nil
+}
+
 // MarkTask sets a task's status. Marking a task todo or doing also brings
 // it out of the archive, since only finished tasks are archived.
 func (s *Store) MarkTask(ctx context.Context, id int64, st Status) error {

@@ -758,6 +758,66 @@ func TestDeadlineViewRowStyling(t *testing.T) {
 	}
 }
 
+func TestCopyTaskViaForm(t *testing.T) {
+	m, store := setup(t, nil)
+	ctx := context.Background()
+	press(m, "c") // on a project
+	if m.mode != modeBrowse || !strings.Contains(m.status, "select a task") {
+		t.Errorf("c on project: mode=%v status=%q", m.mode, m.status)
+	}
+	press(m, "j", "j", "c") // on a subtask: copies the task it is under
+	if m.mode != modeForm {
+		t.Fatal("c did not open the form")
+	}
+	if !strings.Contains(plain(m), "copied from #1 (with its 2 subtasks)") {
+		t.Errorf("copy form title:\n%s", plain(m))
+	}
+	tf, ok := m.form.(*taskForm)
+	if !ok || tf.copyFrom != 1 || tf.title != "paint the hall" || tf.due != "2026-09-10" || tf.project != 1 {
+		t.Fatalf("copy form not filled in: %+v", m.form)
+	}
+	typeText(m, " upstairs")
+	press(m, "enter") // title -> due
+	for range len("2026-09-10") {
+		press(m, "backspace")
+	}
+	typeText(m, "tomorrow")
+	press(m, "enter")      // due -> project
+	press(m, "j", "enter") // house -> work, submit
+	if m.mode != modeBrowse || m.err != nil {
+		t.Fatalf("form: mode=%v err=%v", m.mode, m.err)
+	}
+	if !strings.Contains(m.status, "copied task #1 to task #4 with its 2 subtasks, unticked") {
+		t.Errorf("status: %q", m.status)
+	}
+	got, err := store.GetTask(ctx, 4)
+	if err != nil || got.Title != "paint the hall upstairs" || got.Due != "2026-09-18" || got.ProjectID != 2 || got.Status != task.Todo {
+		t.Errorf("the copy: %+v, %v", got, err)
+	}
+	subs, _ := store.ListSubtasks(ctx, 4)
+	if len(subs) != 2 || subs[0].Title != "buy paint" || subs[0].Done {
+		t.Errorf("copied subtasks: %+v", subs)
+	}
+	if orig, _ := store.GetTask(ctx, 1); orig.Title != "paint the hall" {
+		t.Errorf("original changed: %+v", orig)
+	}
+	if r, _ := m.selected(); r.target() != (target{rowTask, 4}) {
+		t.Errorf("cursor not on the copy: %v", r.target())
+	}
+	if got := labels(m); !reflect.DeepEqual(got, []string{"P:house", "T:paint the hall", "S:buy paint", "S:move furniture", "T:fix the gate", "P:work", "T:email accountant", "T:paint the hall upstairs", "S:buy paint", "S:move furniture"}) {
+		t.Errorf("rows after copying: %v", got)
+	}
+	// A task with no subtasks says so in the title and the status.
+	press(m, "G", "k", "k", "k", "c") // email accountant
+	if !strings.Contains(plain(m), "copied from #3\n") && !strings.Contains(plain(m), "copied from #3 ") {
+		t.Errorf("copy form title for a task with no subtasks:\n%s", plain(m))
+	}
+	press(m, "enter", "enter", "enter")
+	if m.mode != modeBrowse || m.err != nil || m.status != "copied task #3 to task #5" {
+		t.Errorf("plain copy: mode=%v err=%v status=%q", m.mode, m.err, m.status)
+	}
+}
+
 func TestEditTaskViaForm(t *testing.T) {
 	m, store := setup(t, nil)
 	press(m, "j", "e")

@@ -22,9 +22,10 @@ type huhForm struct {
 	height int
 }
 
-func (f *huhForm) Init() tea.Cmd { return f.form.Init() }
-func (f *huhForm) View() string  { return f.form.View() }
-func (f *huhForm) help() string  { return "enter next · shift+tab back · esc cancel" }
+func (f *huhForm) Init() tea.Cmd         { return f.form.Init() }
+func (f *huhForm) View() string          { return f.form.View() }
+func (f *huhForm) help() string          { return "enter next · shift+tab back · esc cancel" }
+func (f *huhForm) saved(t target) string { return "saved " + t.label() }
 
 // Update feeds a message to the form and reports whether it has finished.
 func (f *huhForm) Update(msg tea.Msg) (done bool, submitted bool, cmd tea.Cmd) {
@@ -268,12 +269,14 @@ func (f *projectForm) apply(m *model) (target, error) {
 
 type taskForm struct {
 	huhForm
-	editID  int64
-	title   string
-	due     string
-	status  task.Status
-	project int64
-	today   time.Time
+	editID   int64
+	copyFrom int64 // the task a copy is made from; 0 when adding or editing
+	copySubs int   // how many subtasks come with the copy, for the title
+	title    string
+	due      string
+	status   task.Status
+	project  int64
+	today    time.Time
 }
 
 // projectOptions lists projects for the task form's project field. Every
@@ -300,6 +303,31 @@ func newTaskForm(existing *task.Task, projectID int64, projects []task.Project, 
 	if existing != nil {
 		title = fmt.Sprintf("Edit task #%d", existing.ID)
 	}
+	f.build(title, existing != nil, projects, width, height)
+	return f
+}
+
+// newCopyForm is the task form filled in from an existing task, for a new
+// task that is much like it. The title, due date and project start as the
+// original's and can be changed; the copy is todo and takes the
+// original's subtasks unticked.
+func newCopyForm(from task.Task, subtasks int, projects []task.Project, today time.Time, width, height int) *taskForm {
+	f := &taskForm{copyFrom: from.ID, copySubs: subtasks, title: from.Title, due: from.Due, project: from.ProjectID, status: task.Todo, today: today}
+	title := fmt.Sprintf("New task copied from #%d", from.ID)
+	switch subtasks {
+	case 0:
+	case 1:
+		title += " (with its subtask)"
+	default:
+		title += fmt.Sprintf(" (with its %d subtasks)", subtasks)
+	}
+	f.build(title, false, projects, width, height)
+	return f
+}
+
+// build lays out the task form's fields. The status field is only shown
+// when editing: a new task, copied or not, starts as todo.
+func (f *taskForm) build(title string, withStatus bool, projects []task.Project, width, height int) {
 	var opts []huh.Option[int64]
 	for _, p := range projects {
 		label := p.Name
@@ -313,7 +341,7 @@ func newTaskForm(existing *task.Task, projectID int64, projects []task.Project, 
 		huh.NewInput().Title("Due").Description("YYYY-MM-DD, today, tomorrow, or blank").Value(&f.due).
 			Validate(func(s string) error { _, err := task.ParseDue(s, f.today); return err }),
 	}
-	if existing != nil {
+	if withStatus {
 		fields = append(fields, huh.NewSelect[task.Status]().Title("Status").Options(
 			huh.NewOption("todo", task.Todo),
 			huh.NewOption("doing", task.Doing),
@@ -324,7 +352,6 @@ func newTaskForm(existing *task.Task, projectID int64, projects []task.Project, 
 	fields = append(fields, huh.NewSelect[int64]().Title("Project").Options(opts...).Value(&f.project).Height(8))
 	f.form = huh.NewForm(huh.NewGroup(fields...).Title(title)).WithShowHelp(true)
 	f.resize(width, height)
-	return f
 }
 
 func (f *taskForm) apply(m *model) (target, error) {
@@ -332,12 +359,36 @@ func (f *taskForm) apply(m *model) (target, error) {
 	if err != nil {
 		return target{}, err
 	}
-	if f.editID == 0 {
+	switch {
+	case f.copyFrom != 0:
+		n, err := m.store.CopyTask(m.ctx, f.copyFrom, task.TaskEdit{Title: &f.title, Due: &due, ProjectID: &f.project})
+		if err == nil {
+			// The status line reports what was copied, not what the row
+			// showed when c was pressed.
+			f.copySubs = len(n.Subtasks)
+		}
+		return target{rowTask, n.Task.ID}, err
+	case f.editID == 0:
 		t, err := m.store.AddTask(m.ctx, task.NewTask{ProjectID: f.project, Title: f.title, Due: due})
 		return target{rowTask, t.ID}, err
 	}
 	t, err := m.store.UpdateTask(m.ctx, f.editID, task.TaskEdit{Title: &f.title, Due: &due, Status: &f.status, ProjectID: &f.project})
 	return target{rowTask, t.ID}, err
+}
+
+func (f *taskForm) saved(t target) string {
+	if f.copyFrom == 0 {
+		return f.huhForm.saved(t)
+	}
+	s := fmt.Sprintf("copied task #%d to %s", f.copyFrom, t.label())
+	switch f.copySubs {
+	case 0:
+	case 1:
+		s += " with its subtask, unticked"
+	default:
+		s += fmt.Sprintf(" with its %d subtasks, unticked", f.copySubs)
+	}
+	return s
 }
 
 // ---- subtask ----

@@ -265,8 +265,9 @@ func TestTaskLifecycle(t *testing.T) {
 	if out := r.run("", false, "task", "unarchive", "2"); !strings.Contains(out, "task 2 unarchived") {
 		t.Errorf("unarchive: %q", out)
 	}
-	if err := json.Unmarshal([]byte(r.run("", false, "task", "show", "2", "--json")), &node); err != nil || node.Task.Archived {
-		t.Errorf("after unarchive: %+v, %v", node, err)
+	var back task.TaskNode
+	if err := json.Unmarshal([]byte(r.run("", false, "task", "show", "2", "--json")), &back); err != nil || back.Task.Archived || back.Task.Status != task.Finished {
+		t.Errorf("after unarchive: %+v, %v", back, err)
 	}
 	if out := r.run("", false, "task", "list", "--project", "1"); !strings.Contains(out, "no tasks match") {
 		t.Errorf("--project 1 after the move:\n%s", out)
@@ -280,6 +281,41 @@ func TestTaskLifecycle(t *testing.T) {
 	}
 	if msg := r.run("", true, "task", "show", "1"); !strings.Contains(msg, "task 1: not found") {
 		t.Errorf("show deleted: %q", msg)
+	}
+}
+
+func TestCopyTask(t *testing.T) {
+	r := newRunner(t)
+	r.run("", false, "project", "add", "house")
+	r.run("", false, "project", "add", "work")
+	r.run("", false, "task", "add", "paint the hall", "--project", "1", "--due", "2026-10-01")
+	r.run("", false, "subtask", "add", "1", "buy paint")
+	r.run("", false, "subtask", "add", "1", "move furniture")
+	r.run("", false, "subtask", "tick", "1")
+	out := r.run("", false, "task", "copy", "1")
+	if !strings.Contains(out, "copied task 1 to 2: paint the hall (project 1, 2 subtasks)") {
+		t.Errorf("copy: %q", out)
+	}
+	var node task.TaskNode
+	if err := json.Unmarshal([]byte(r.run("", false, "task", "show", "2", "--json")), &node); err != nil || node.Task.Due != "2026-10-01" || node.Task.Status != task.Todo || len(node.Subtasks) != 2 || node.Subtasks[0].Done {
+		t.Errorf("the copy: %+v, %v", node, err)
+	}
+	// A fresh value each time: an omitted field would keep the old one.
+	var flagged task.TaskNode
+	if err := json.Unmarshal([]byte(r.run("", false, "task", "copy", "1", "--title", "paint the landing", "--no-due", "--project", "2", "--json")), &flagged); err != nil || flagged.Task.ID != 3 || flagged.Task.Title != "paint the landing" || flagged.Task.Due != "" || flagged.Task.ProjectID != 2 || len(flagged.Subtasks) != 2 {
+		t.Errorf("copy with flags --json: %+v, %v", flagged, err)
+	}
+	if msg := r.run("", true, "task", "copy", "1", "--due", "today", "--no-due"); !strings.Contains(msg, "cannot both") {
+		t.Errorf("copy with both due flags: %q", msg)
+	}
+	if msg := r.run("", true, "task", "copy", "9"); !strings.Contains(msg, "task 9: not found") {
+		t.Errorf("copy of a missing task: %q", msg)
+	}
+	if msg := r.run("", true, "task", "copy", "1", "--project", "9"); !strings.Contains(msg, "project 9: not found") {
+		t.Errorf("copy into a missing project: %q", msg)
+	}
+	if out := r.run("", false, "task", "show", "1"); !strings.Contains(out, "[x] 1  buy paint") {
+		t.Errorf("original changed by the copy:\n%s", out)
 	}
 }
 

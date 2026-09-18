@@ -21,6 +21,7 @@ func taskCmd(dbPath *string) *cobra.Command {
 		taskListCmd(dbPath),
 		taskShowCmd(dbPath),
 		taskEditCmd(dbPath),
+		taskCopyCmd(dbPath),
 		taskMarkCmd(dbPath),
 		taskArchiveCmd(dbPath, true),
 		taskArchiveCmd(dbPath, false),
@@ -286,6 +287,63 @@ func taskEditCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().StringVar(&due, "due", "", "new due date: YYYY-MM-DD, today or tomorrow")
 	cmd.Flags().BoolVar(&noDue, "no-due", false, "remove the due date")
 	cmd.Flags().Int64Var(&project, "project", 0, "move the task to this project")
+	return cmd
+}
+
+func taskCopyCmd(dbPath *string) *cobra.Command {
+	var title, due string
+	var project int64
+	var noDue, asJSON bool
+	cmd := &cobra.Command{
+		Use:   "copy ID",
+		Short: "Make a new task from an existing one",
+		Long: `Copy a task: the new task takes the original's title, due date and project
+unless a flag says otherwise, starts as todo, and gets the original's subtasks
+unticked.`,
+		Example: `  tasktracker task copy 3 --title "paint the landing" --due 2026-11-01`,
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseID("task", args[0])
+			if err != nil {
+				return err
+			}
+			var e task.TaskEdit
+			if cmd.Flags().Changed("title") {
+				e.Title = &title
+			}
+			switch {
+			case noDue && cmd.Flags().Changed("due"):
+				return errors.New("--due and --no-due cannot both be given")
+			case noDue:
+				none := ""
+				e.Due = &none
+			case cmd.Flags().Changed("due"):
+				e.Due = &due
+			}
+			if cmd.Flags().Changed("project") {
+				e.ProjectID = &project
+			}
+			store, err := openStore(dbPath)
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+			n, err := store.CopyTask(cmd.Context(), id, e)
+			if err != nil {
+				return fmt.Errorf("task %d: %w", id, err)
+			}
+			if asJSON {
+				return writeJSON(cmd.OutOrStdout(), n)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "copied task %d to %d: %s (project %d, %d subtasks)\n", id, n.Task.ID, n.Task.Title, n.Task.ProjectID, len(n.Subtasks))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&title, "title", "", "title for the copy; the original's if not given")
+	cmd.Flags().StringVar(&due, "due", "", "due date for the copy: YYYY-MM-DD, today or tomorrow")
+	cmd.Flags().BoolVar(&noDue, "no-due", false, "give the copy no due date")
+	cmd.Flags().Int64Var(&project, "project", 0, "put the copy in this project")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "print the copy with its subtasks as JSON")
 	return cmd
 }
 

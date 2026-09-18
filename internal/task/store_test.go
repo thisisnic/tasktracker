@@ -230,6 +230,68 @@ func TestListTasksFilters(t *testing.T) {
 	}
 }
 
+func TestCopyTask(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	house := addProject(t, s, NewProject{Name: "house"})
+	work := addProject(t, s, NewProject{Name: "work"})
+	orig := addTask(t, s, NewTask{ProjectID: house.ID, Title: "paint the hall", Due: "2026-10-01"})
+	buy := addSubtask(t, s, orig.ID, "buy paint")
+	addSubtask(t, s, orig.ID, "move furniture")
+	check(t, s.TickSubtask(ctx, buy.ID, true))
+	check(t, s.MarkTask(ctx, orig.ID, Doing))
+
+	// A plain copy: same title, due and project, todo, subtasks unticked.
+	got, err := s.CopyTask(ctx, orig.ID, TaskEdit{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Task.ID == orig.ID || got.Task.Title != "paint the hall" || got.Task.Due != "2026-10-01" || got.Task.ProjectID != house.ID || got.Task.Status != Todo {
+		t.Errorf("copy = %+v", got.Task)
+	}
+	if len(got.Subtasks) != 2 || got.Subtasks[0].Title != "buy paint" || got.Subtasks[0].Done || got.Subtasks[1].Title != "move furniture" || got.Subtasks[0].TaskID != got.Task.ID {
+		t.Errorf("copied subtasks = %+v", got.Subtasks)
+	}
+	if o, _ := s.GetTask(ctx, orig.ID); o.Status != Doing {
+		t.Errorf("original changed: %+v", o)
+	}
+	if subs, _ := s.ListSubtasks(ctx, orig.ID); len(subs) != 2 || !subs[0].Done {
+		t.Errorf("original subtasks changed: %+v", subs)
+	}
+
+	// Overrides replace the copied fields.
+	title, due := " paint the landing ", "none"
+	got, err = s.CopyTask(ctx, orig.ID, TaskEdit{Title: &title, Due: &due, ProjectID: &work.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Task.Title != "paint the landing" || got.Task.Due != "" || got.Task.ProjectID != work.ID {
+		t.Errorf("copy with overrides = %+v", got.Task)
+	}
+	blank, bad, missing := "  ", "soon", int64(99)
+	if _, err := s.CopyTask(ctx, orig.ID, TaskEdit{Title: &blank}); err == nil {
+		t.Error("blank title accepted")
+	}
+	if _, err := s.CopyTask(ctx, orig.ID, TaskEdit{Due: &bad}); err == nil {
+		t.Error("bad due accepted")
+	}
+	done := Finished
+	if _, err := s.CopyTask(ctx, orig.ID, TaskEdit{Status: &done}); err == nil || !strings.Contains(err.Error(), "starts as todo") {
+		t.Errorf("status override: %v", err)
+	}
+	if _, err := s.CopyTask(ctx, orig.ID, TaskEdit{ProjectID: &missing}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing project = %v", err)
+	}
+	if _, err := s.CopyTask(ctx, 99, TaskEdit{}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing task = %v", err)
+	}
+	// A task with no subtasks copies to one with an empty, non-nil list.
+	plain := addTask(t, s, NewTask{ProjectID: house.ID, Title: "fix the gate"})
+	if got, err := s.CopyTask(ctx, plain.ID, TaskEdit{}); err != nil || got.Subtasks == nil || len(got.Subtasks) != 0 {
+		t.Errorf("copy of a task with no subtasks: %+v, %v", got, err)
+	}
+}
+
 func TestArchive(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)
