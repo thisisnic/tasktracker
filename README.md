@@ -92,8 +92,9 @@ tasktracker task list --due --json
   hides everything in it, behind a `▸` that keeps the open count; press it
   again to show them. Folds last until you quit.
 - **By project or by deadline** - The tree groups tasks under their
-  projects. Press `v` for the same tasks as one list, soonest due first
-  with undated ones last and overdue dates in red; `v` again goes back.
+  projects. Press `v` for the same tasks as one list under the headings
+  Overdue, Next 7 days, Next 30 days, Longer and No deadline, soonest
+  first within each, with finished tasks last; `v` again goes back.
 - **Archive, don't lose** - A done or dropped task stays in the tree,
   greyed, until you press `z` to archive it. `f` shows the archive, and
   `z` there brings a task back; so does reopening it.

@@ -127,11 +127,16 @@ Layout, to be adjusted as it gets used:
   selected item.
 - The same pane arranged by deadline: every task as one list, soonest due
   first, undated tasks last, subtasks still under their task and the
-  project name after the title. One key switches between the two, so
-  the tree answers "what is there to do on this" and the list answers
-  "what is due next". The list first held only open tasks with a due
-  date; it now holds everything the tree does, so switching never loses
-  a task from view.
+  project name after the title. The list is split under headings for how
+  soon: overdue, the next 7 days (from today), the next 30, longer, and
+  no deadline, each with a count and left out when empty. A done or
+  dropped task is not due any more, so it sits last under its own
+  heading until archived. The headings are labels, not rows to select;
+  the cursor skips them. One key
+  switches between the two views, so the tree answers "what is there to
+  do on this" and the list answers "what is due next". The list first
+  held only open tasks with a due date; it now holds everything the tree
+  does, so switching never loses a task from view.
 - Finished tasks stay in the tree, greyed, until archived. Archived tasks
   and finished projects (done or shelved) are hidden by default and shown
   with a toggle, so the tree stays short.

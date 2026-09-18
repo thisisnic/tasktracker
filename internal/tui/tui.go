@@ -76,12 +76,14 @@ const (
 	rowProject
 	rowTask
 	rowSubtask
+	rowHeading // a label over a group of tasks by deadline; never selected
 )
 
-// row is one selectable line in the left pane. Area is set for area rows.
-// Project is set for every other row: the project the row belongs to. Task
-// is set for task and subtask rows. Depth is how many areas the row is
-// inside, and sets its indent.
+// row is one line in the left pane. Area is set for area rows. Project is
+// set for every project, task and subtask row: the project the row belongs
+// to. Task is set for task and subtask rows. Depth is how many areas the
+// row is inside, and sets its indent. A heading row has only its name and
+// how many tasks are under it.
 type row struct {
 	kind    rowKind
 	depth   int
@@ -89,6 +91,8 @@ type row struct {
 	project task.ProjectNode
 	task    task.TaskNode
 	subtask task.Subtask
+	heading string
+	count   int
 }
 
 // target names the row to select after a change: a kind and an id.
@@ -167,6 +171,7 @@ func (m *model) reload() error {
 		return err
 	}
 	m.rebuildRows()
+	defer m.settle()
 	if keep != nil && !m.selectTarget(*keep) {
 		// The row is still there but folded away, as when switching back
 		// to by project from a task inside a folded project: land on the
@@ -217,7 +222,8 @@ func (m *model) pruneFolds() error {
 // rows are an area's areas, then its projects, each indented one step
 // deeper, skipping what is inside a collapsed area or project. By
 // deadline, the rows are every task with its subtasks under it, with no
-// area or project rows, soonest due first and undated tasks last.
+// area or project rows, soonest due first and undated tasks last, under
+// a heading for how soon they are due.
 func (m *model) rebuildRows() {
 	m.rows = m.rows[:0]
 	if m.view == viewDeadline {
@@ -251,12 +257,17 @@ func (m *model) rebuildRows() {
 }
 
 // deadlineRows lists every task in the outline with its subtasks, ordered
-// by due date with undated tasks last. Tasks due the same day, and undated
-// ones, keep their by-project order, so the list is stable across reloads.
+// by due date with undated tasks last, and a heading over each run of
+// tasks due about as soon: overdue, the next 7 days, the next 30, longer,
+// and no deadline. Done and dropped tasks are not coming up, so they go
+// last under a heading of their own, until archived. Tasks due the same
+// day, and undated ones, keep their by-project order, so the list is
+// stable across reloads.
 func (m *model) deadlineRows() []row {
 	type group struct {
-		due  string
-		rows []row
+		due      string
+		finished bool
+		rows     []row
 	}
 	var groups []group
 	var walk func(areas []task.AreaNode, projects []task.ProjectNode)
@@ -266,7 +277,7 @@ func (m *model) deadlineRows() []row {
 		}
 		for _, p := range projects {
 			for _, t := range p.Tasks {
-				g := group{due: t.Task.Due, rows: []row{{kind: rowTask, project: p, task: t}}}
+				g := group{due: t.Task.Due, finished: !t.Task.Open(), rows: []row{{kind: rowTask, project: p, task: t}}}
 				for _, s := range t.Subtasks {
 					g.rows = append(g.rows, row{kind: rowSubtask, project: p, task: t, subtask: s})
 				}
@@ -276,17 +287,73 @@ func (m *model) deadlineRows() []row {
 	}
 	walk(m.outline.Areas, m.outline.Projects)
 	sort.SliceStable(groups, func(i, j int) bool {
+		if groups[i].finished != groups[j].finished {
+			return !groups[i].finished
+		}
 		a, b := groups[i].due, groups[j].due
 		if a == "" || b == "" {
 			return a != "" && b == ""
 		}
 		return a < b
 	})
-	var rows []row
+	// Groups are in heading order, so each heading's tasks are one run.
+	today := m.now()
+	counts := map[string]int{}
 	for _, g := range groups {
+		counts[deadlineHeading(g.due, g.finished, today)]++
+	}
+	var rows []row
+	last := ""
+	for _, g := range groups {
+		if h := deadlineHeading(g.due, g.finished, today); h != last {
+			rows = append(rows, row{kind: rowHeading, heading: h, count: counts[h]})
+			last = h
+		}
 		rows = append(rows, g.rows...)
 	}
 	return rows
+}
+
+// deadlineHeading names how soon a due date is, for a task that is still
+// open. The next 7 days start today; the next 30 start where the 7 end. A
+// finished task is not due at all, whatever its date.
+func deadlineHeading(due string, finished bool, today time.Time) string {
+	days, ok := task.Task{Due: due}.DaysUntilDue(today)
+	switch {
+	case finished:
+		return "Finished"
+	case !ok:
+		return "No deadline"
+	case days < 0:
+		return "Overdue"
+	case days < 7:
+		return "Next 7 days"
+	case days < 30:
+		return "Next 30 days"
+	}
+	return "Longer"
+}
+
+// settle moves the cursor off a heading, which is never selected, to the
+// task below it. A heading is always followed by a task, so there is one.
+// The cursor rests on a heading only after a change that moved or removed
+// the row it was on.
+func (m *model) settle() {
+	if m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowHeading {
+		m.step(1)
+	}
+}
+
+// step moves the cursor one selectable row down (dir 1) or up (dir -1),
+// skipping headings, and reports whether there was one to move to.
+func (m *model) step(dir int) bool {
+	for i := m.cursor + dir; i >= 0 && i < len(m.rows); i += dir {
+		if m.rows[i].kind != rowHeading {
+			m.cursor = i
+			return true
+		}
+	}
+	return false
 }
 
 func (r row) target() target {
@@ -297,6 +364,8 @@ func (r row) target() target {
 		return target{rowTask, r.task.Task.ID}
 	case rowSubtask:
 		return target{rowSubtask, r.subtask.ID}
+	case rowHeading:
+		return target{rowHeading, 0}
 	}
 	return target{rowProject, r.project.Project.ID}
 }
@@ -326,8 +395,10 @@ func (m *model) selectTarget(t target) bool {
 	return false
 }
 
+// selected is the row under the cursor. A heading is not something to act
+// on, so it counts as nothing selected.
 func (m *model) selected() (row, bool) {
-	if len(m.rows) == 0 || m.cursor >= len(m.rows) {
+	if len(m.rows) == 0 || m.cursor >= len(m.rows) || m.rows[m.cursor].kind == rowHeading {
 		return row{}, false
 	}
 	return m.rows[m.cursor], true
@@ -468,17 +539,15 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c", "esc":
 		return m, tea.Quit
 	case "j", "down":
-		if m.cursor < len(m.rows)-1 {
-			m.cursor++
-		}
+		m.step(1)
 	case "k", "up":
-		if m.cursor > 0 {
-			m.cursor--
-		}
+		m.step(-1)
 	case "g", "home":
 		m.cursor = 0
+		m.settle()
 	case "G", "end":
 		m.cursor = max(0, len(m.rows)-1)
+		m.settle()
 	case "r":
 		m.goalLabels = map[int64][]goallink.Goal{}
 		m.goalErr = nil
@@ -496,7 +565,7 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		from, _ := m.selected()
 		if m.view == viewTree {
 			m.view = viewDeadline
-			m.status = "by deadline: every task, soonest due first, undated last"
+			m.status = "by deadline: overdue, next 7 days, next 30 days, longer, no deadline"
 		} else {
 			m.view = viewTree
 			m.status = "by project"
@@ -598,12 +667,13 @@ func (m *model) landByDeadline(from row) {
 		return
 	}
 	for i, r := range m.rows {
-		if within[r.project.Project.ID] {
+		if r.kind != rowHeading && within[r.project.Project.ID] {
 			m.cursor = i
 			return
 		}
 	}
 	m.cursor = 0
+	m.settle()
 }
 
 // areaHere is the area a new area or project goes in by default: the
@@ -956,6 +1026,7 @@ var (
 	labelStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	projectStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
 	areaStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13"))
+	headingStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("4"))
 	errStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	paneStyle     = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("8")).Padding(0, 1)
 )
@@ -1047,6 +1118,9 @@ func (m *model) viewRow(r row, selected bool, w int) string {
 	finished := false
 	indent := strings.Repeat("  ", r.depth)
 	switch r.kind {
+	case rowHeading:
+		right = fmt.Sprintf("%d", r.count)
+		return headingStyle.Render(fit(r.heading, right, w))
 	case rowArea:
 		left = indent + m.foldMark(r.target()) + r.area.Area.Name
 		if n := r.area.OpenTasks(); n > 0 {
