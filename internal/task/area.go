@@ -175,7 +175,7 @@ func (s *Store) DeleteArea(ctx context.Context, id int64) error {
 	})
 }
 
-// AreaPath names an area by its ancestry, outermost first: "arrow / stf".
+// AreaPath names an area by its ancestry, outermost first: "home / garden".
 // An id that is not in areas gives "".
 func AreaPath(areas []Area, id int64) string {
 	byID := map[int64]Area{}

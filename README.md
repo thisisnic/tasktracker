@@ -39,7 +39,7 @@ A project · a task · s subtask · e edit · space next status/tick · x drop �
 4. Mark a project `done` or `shelved` when it is over. Finished projects
    and tasks are hidden from the tree until you ask for them.
 5. Once there are enough projects, group them into areas. An area is a
-   name that holds projects and other areas, so "arrow" can hold "stf" and
+   name that holds projects and other areas, so "home" can hold "garden" and
    "maintenance" with projects inside each. Fold an area or a project
    when what is in it is in the way.
 
@@ -65,8 +65,8 @@ The same data is there on the command line, with `--json` for scripts and
 coding agents:
 
 ```bash
-tasktracker area add "arrow"
-tasktracker area add "stf" --in 1
+tasktracker area add "home"
+tasktracker area add "garden" --in 1
 tasktracker project add "house" --description "fix it up" --goal 3
 tasktracker project add "grant report" --in 2
 tasktracker task add "paint the hall" --project 1 --due 2026-10-01

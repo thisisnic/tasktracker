@@ -333,7 +333,7 @@ func TestTreeJSONHasNoNulls(t *testing.T) {
 	// each print [] for what they lack, as the README promises.
 	r := newRunner(t)
 	r.run("", false, "area", "add", "empty")
-	r.run("", false, "area", "add", "arrow")
+	r.run("", false, "area", "add", "home")
 	r.run("", false, "project", "add", "bare", "--in", "2")
 	r.run("", false, "project", "add", "house")
 	r.run("", false, "task", "add", "paint", "--project", "2")
@@ -345,20 +345,20 @@ func TestTreeJSONHasNoNulls(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &o); err != nil {
 		t.Fatal(err)
 	}
-	empty, arrow := o.Areas[0], o.Areas[1]
-	if empty.Areas == nil || empty.Projects == nil || arrow.Areas == nil || arrow.Projects[0].Tasks == nil || o.Projects[0].Tasks[0].Subtasks == nil {
+	empty, home := o.Areas[0], o.Areas[1]
+	if empty.Areas == nil || empty.Projects == nil || home.Areas == nil || home.Projects[0].Tasks == nil || o.Projects[0].Tasks[0].Subtasks == nil {
 		t.Errorf("a nested list is missing: %s", out)
 	}
 }
 
 func TestAreas(t *testing.T) {
 	r := newRunner(t)
-	out := r.run("", false, "area", "add", "arrow")
-	if !strings.Contains(out, "added area 1: arrow") {
+	out := r.run("", false, "area", "add", "home")
+	if !strings.Contains(out, "added area 1: home") {
 		t.Fatalf("add: %q", out)
 	}
 	var a task.Area
-	if err := json.Unmarshal([]byte(r.run("", false, "area", "add", "stf", "--in", "1", "--json")), &a); err != nil || a.ID != 2 || a.ParentID != 1 {
+	if err := json.Unmarshal([]byte(r.run("", false, "area", "add", "garden", "--in", "1", "--json")), &a); err != nil || a.ID != 2 || a.ParentID != 1 {
 		t.Errorf("add --json: %+v, %v", a, err)
 	}
 	r.run("", false, "area", "add", "maintenance", "--in", "1")
@@ -374,26 +374,26 @@ func TestAreas(t *testing.T) {
 	}
 
 	out = r.run("", false, "area", "list")
-	for _, want := range []string{"ID  AREA", "1   arrow", "2     stf", "3     maintenance"} {
+	for _, want := range []string{"ID  AREA", "1   home", "2     garden", "3     maintenance"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("area list missing %q:\n%s", want, out)
 		}
 	}
 	out = r.run("", false, "project", "list")
-	if !strings.Contains(out, "AREA") || !strings.Contains(out, "arrow / stf") {
+	if !strings.Contains(out, "AREA") || !strings.Contains(out, "home / garden") {
 		t.Errorf("project list:\n%s", out)
 	}
 	out = r.run("", false, "project", "show", "1")
-	if !strings.Contains(out, "area:   arrow / stf") {
+	if !strings.Contains(out, "area:   home / garden") {
 		t.Errorf("project show:\n%s", out)
 	}
 	var detail projectDetail
-	if err := json.Unmarshal([]byte(r.run("", false, "project", "show", "1", "--json")), &detail); err != nil || detail.Area != "arrow / stf" || detail.AreaID != 2 {
+	if err := json.Unmarshal([]byte(r.run("", false, "project", "show", "1", "--json")), &detail); err != nil || detail.Area != "home / garden" || detail.AreaID != 2 {
 		t.Errorf("show --json: %+v, %v", detail, err)
 	}
 	out = r.run("", false, "task", "list")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) != 7 || !strings.HasPrefix(lines[1], "A1") || !strings.Contains(lines[2], "  stf") ||
+	if len(lines) != 7 || !strings.HasPrefix(lines[1], "A1") || !strings.Contains(lines[2], "  garden") ||
 		!strings.Contains(lines[3], "    grant report") || !strings.Contains(lines[4], "      draft") ||
 		!strings.Contains(lines[5], "  maintenance") || !strings.Contains(lines[6], "house") {
 		t.Errorf("task list:\n%s", out)
@@ -403,7 +403,7 @@ func TestAreas(t *testing.T) {
 		t.Errorf("task list --json: %+v, %v", o, err)
 	}
 
-	// Moves: the project out to the top, then into maintenance; stf out
+	// Moves: the project out to the top, then into maintenance; garden out
 	// to the top and back in; refusals for an area put inside itself.
 	r.run("", false, "project", "edit", "1", "--top")
 	r.run("", false, "project", "edit", "1", "--in", "3")
@@ -414,7 +414,7 @@ func TestAreas(t *testing.T) {
 	if err := json.Unmarshal([]byte(r.run("", false, "project", "add", "probe", "--json")), &p); err != nil || p.AreaID != 0 {
 		t.Errorf("probe: %+v, %v", p, err)
 	}
-	r.run("", false, "area", "edit", "2", "--top", "--name", "STF")
+	r.run("", false, "area", "edit", "2", "--top", "--name", "GARDEN")
 	r.run("", false, "area", "edit", "2", "--in", "1")
 	if msg := r.run("", true, "area", "edit", "1", "--in", "2"); !strings.Contains(msg, "inside itself") {
 		t.Errorf("cycle: %q", msg)
@@ -426,18 +426,18 @@ func TestAreas(t *testing.T) {
 		t.Errorf("edit with both flags: %q", msg)
 	}
 	var as []task.Area
-	if err := json.Unmarshal([]byte(r.run("", false, "area", "list", "--json")), &as); err != nil || len(as) != 3 || as[1].Name != "STF" || as[1].ParentID != 1 {
+	if err := json.Unmarshal([]byte(r.run("", false, "area", "list", "--json")), &as); err != nil || len(as) != 3 || as[1].Name != "GARDEN" || as[1].ParentID != 1 {
 		t.Errorf("areas: %+v, %v", as, err)
 	}
 
-	// Deleting maintenance moves the report up into arrow; declining keeps it.
+	// Deleting maintenance moves the report up into home; declining keeps it.
 	if out := r.run("n\n", false, "area", "delete", "3"); !strings.Contains(out, "kept") {
 		t.Errorf("declined delete: %q", out)
 	}
 	if out := r.run("", false, "area", "delete", "3", "--yes"); !strings.Contains(out, "deleted area 3") {
 		t.Errorf("delete: %q", out)
 	}
-	if err := json.Unmarshal([]byte(r.run("", false, "project", "show", "1", "--json")), &detail); err != nil || detail.AreaID != 1 || detail.Area != "arrow" {
+	if err := json.Unmarshal([]byte(r.run("", false, "project", "show", "1", "--json")), &detail); err != nil || detail.AreaID != 1 || detail.Area != "home" {
 		t.Errorf("after delete: %+v, %v", detail, err)
 	}
 	if msg := r.run("", true, "area", "delete", "3", "--yes"); !strings.Contains(msg, "area 3: not found") {

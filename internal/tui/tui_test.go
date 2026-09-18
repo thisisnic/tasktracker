@@ -710,16 +710,16 @@ func TestDueWords(t *testing.T) {
 	}
 }
 
-// withAreas puts the setup data into areas: arrow holds stf, which holds
-// house; work sits in arrow itself. Returns the ids of arrow and stf.
-func withAreas(t *testing.T, m *model, store *task.Store) (arrow, stf int64) {
+// withAreas puts the setup data into areas: home holds garden, which holds
+// house; work sits in home itself. Returns the ids of home and garden.
+func withAreas(t *testing.T, m *model, store *task.Store) (home, garden int64) {
 	t.Helper()
 	ctx := context.Background()
-	a, err := store.AddArea(ctx, task.NewArea{Name: "arrow"})
+	a, err := store.AddArea(ctx, task.NewArea{Name: "home"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := store.AddArea(ctx, task.NewArea{Name: "stf", ParentID: a.ID})
+	s, err := store.AddArea(ctx, task.NewArea{Name: "garden", ParentID: a.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -739,18 +739,18 @@ func withAreas(t *testing.T, m *model, store *task.Store) (arrow, stf int64) {
 func TestAreaRows(t *testing.T) {
 	m, store := setup(t, nil)
 	withAreas(t, m, store)
-	want := []string{"A:arrow", "A:stf", "P:house", "T:paint the hall", "S:buy paint", "S:move furniture", "T:fix the gate", "P:work", "T:email accountant"}
+	want := []string{"A:home", "A:garden", "P:house", "T:paint the hall", "S:buy paint", "S:move furniture", "T:fix the gate", "P:work", "T:email accountant"}
 	if got := labels(m); !reflect.DeepEqual(got, want) {
 		t.Fatalf("rows = %v\nwant   %v", got, want)
 	}
 	view := plain(m)
-	for _, want := range []string{"▾ arrow", "  ▾ stf", "    ▾ house", "      ○ paint the hall", "        [x] buy paint", "  ▾ work", "    ○ email accountant", "3 open", "holds   1 areas, 2 projects", "tasks   3 open"} {
+	for _, want := range []string{"▾ home", "  ▾ garden", "    ▾ house", "      ○ paint the hall", "        [x] buy paint", "  ▾ work", "    ○ email accountant", "3 open", "holds   1 areas, 2 projects", "tasks   3 open"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q:\n%s", want, view)
 		}
 	}
 	press(m, "j", "j") // house
-	if view := plain(m); !strings.Contains(view, "area  arrow / stf") {
+	if view := plain(m); !strings.Contains(view, "area  home / garden") {
 		t.Errorf("project detail missing its area:\n%s", view)
 	}
 	press(m, "k", "space")
@@ -827,7 +827,7 @@ func TestCollapse(t *testing.T) {
 		t.Errorf("rows after adding = %v", got)
 	}
 
-	press(m, "g", "right") // the right arrow unfolds too
+	press(m, "g", "right") // the right home unfolds too
 	if got := labels(m); got[1] != "T:paint the hall" || len(got) != 8 {
 		t.Errorf("rows after l = %v", got)
 	}
@@ -863,44 +863,44 @@ func TestCollapse(t *testing.T) {
 func TestFoldArea(t *testing.T) {
 	m, store := setup(t, nil)
 	ctx := context.Background()
-	arrow, stf := withAreas(t, m, store)
-	press(m, "j", "left") // fold stf: house and its tasks go
-	want := []string{"A:arrow", "A:stf", "P:work", "T:email accountant"}
+	home, garden := withAreas(t, m, store)
+	press(m, "j", "left") // fold garden: house and its tasks go
+	want := []string{"A:home", "A:garden", "P:work", "T:email accountant"}
 	if got := labels(m); !reflect.DeepEqual(got, want) {
-		t.Fatalf("rows after folding stf = %v\nwant %v", got, want)
+		t.Fatalf("rows after folding garden = %v\nwant %v", got, want)
 	}
-	if !strings.Contains(m.status, "collapsed stf") {
+	if !strings.Contains(m.status, "collapsed garden") {
 		t.Errorf("status: %q", m.status)
 	}
 	view := plain(m)
-	for _, want := range []string{"▾ arrow", "  ▸ stf", "collapsed; ← shows what is in it", "tasks   2 open"} {
+	for _, want := range []string{"▾ home", "  ▸ garden", "collapsed; ← shows what is in it", "tasks   2 open"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q:\n%s", want, view)
 		}
 	}
-	press(m, "k", "right") // fold arrow: everything in it goes, stf's fold kept
-	if got := labels(m); !reflect.DeepEqual(got, []string{"A:arrow"}) {
-		t.Errorf("rows after folding arrow = %v", got)
+	press(m, "k", "right") // fold home: everything in it goes, garden's fold kept
+	if got := labels(m); !reflect.DeepEqual(got, []string{"A:home"}) {
+		t.Errorf("rows after folding home = %v", got)
 	}
 	press(m, "left")
 	if got := labels(m); !reflect.DeepEqual(got, want) {
-		t.Errorf("rows after unfolding arrow = %v", got)
+		t.Errorf("rows after unfolding home = %v", got)
 	}
 
 	// Adding a project inside a folded area shows the area's contents.
-	press(m, "j", "A") // on stf
+	press(m, "j", "A") // on garden
 	typeText(m, "grant")
-	press(m, "enter", "enter", "enter", "enter") // name, about, area (stf kept), goals -> submit
+	press(m, "enter", "enter", "enter", "enter") // name, about, area (garden kept), goals -> submit
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("project form: mode=%v err=%v", m.mode, m.err)
 	}
 	if r, _ := m.selected(); r.kind != rowProject || r.project.Project.Name != "grant" {
 		t.Errorf("cursor after adding into a folded area: %v", r.target())
 	}
-	if m.collapsed[target{rowArea, stf}] {
-		t.Error("stf still collapsed after adding a project into it")
+	if m.collapsed[target{rowArea, garden}] {
+		t.Error("garden still collapsed after adding a project into it")
 	}
-	if got := labels(m); !strings.HasPrefix(strings.Join(got, " "), "A:arrow A:stf P:house T:paint the hall") || got[len(got)-3] != "P:grant" {
+	if got := labels(m); !strings.HasPrefix(strings.Join(got, " "), "A:home A:garden P:house T:paint the hall") || got[len(got)-3] != "P:grant" {
 		t.Errorf("rows after adding = %v", got)
 	}
 
@@ -918,7 +918,7 @@ func TestFoldArea(t *testing.T) {
 
 	// A subtask saved inside a folded project inside a folded area unfolds
 	// both.
-	m.collapsed[target{rowArea, arrow}] = true
+	m.collapsed[target{rowArea, home}] = true
 	m.collapsed[target{rowProject, 1}] = true
 	m.rebuildRows()
 	m.reveal(target{rowSubtask, 1})
@@ -933,20 +933,20 @@ func TestFoldArea(t *testing.T) {
 func TestAreaForms(t *testing.T) {
 	m, store := setup(t, nil)
 	ctx := context.Background()
-	arrow, stf := withAreas(t, m, store)
-	press(m, "j", "n") // on stf: a new area inside it
+	home, garden := withAreas(t, m, store)
+	press(m, "j", "n") // on garden: a new area inside it
 	af, ok := m.form.(*areaForm)
-	if !ok || af.parent != stf {
+	if !ok || af.parent != garden {
 		t.Fatalf("form = %T parent=%d", m.form, af.parent)
 	}
 	typeText(m, "grant")
-	press(m, "enter", "enter") // name -> inside (stf kept) -> submit
+	press(m, "enter", "enter") // name -> inside (garden kept) -> submit
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("area form: mode=%v err=%v", m.mode, m.err)
 	}
 	areas, _ := store.ListAreas(ctx)
 	grant := areas[len(areas)-1]
-	if grant.Name != "grant" || grant.ParentID != stf {
+	if grant.Name != "grant" || grant.ParentID != garden {
 		t.Errorf("saved area: %+v", grant)
 	}
 	if r, _ := m.selected(); r.target() != (target{rowArea, grant.ID}) {
@@ -956,10 +956,10 @@ func TestAreaForms(t *testing.T) {
 		t.Errorf("rows: %v", got)
 	}
 
-	// Editing stf cannot offer stf or grant as a home; move it to the top.
+	// Editing garden cannot offer garden or grant as a home; move it to the top.
 	press(m, "k", "e")
 	af, ok = m.form.(*areaForm)
-	if !ok || af.editID != stf || af.name != "stf" {
+	if !ok || af.editID != garden || af.name != "garden" {
 		t.Fatalf("edit form = %T %+v", m.form, af)
 	}
 	typeText(m, " work")
@@ -967,25 +967,25 @@ func TestAreaForms(t *testing.T) {
 	if _, ok := af.form.GetFocusedField().(*huh.Select[int64]); !ok {
 		t.Fatalf("second field = %T", af.form.GetFocusedField())
 	}
-	// The list is (top level) and arrow only: stf and grant are left out.
-	// The select starts on arrow and wraps, so j reaches the top; were
-	// stf offered, j would land on it instead.
+	// The list is (top level) and home only: garden and grant are left out.
+	// The select starts on home and wraps, so j reaches the top; were
+	// garden offered, j would land on it instead.
 	press(m, "j", "enter")
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("edit form: mode=%v err=%v", m.mode, m.err)
 	}
-	a, _ := store.GetArea(ctx, stf)
-	if a.Name != "stf work" || a.ParentID != 0 {
+	a, _ := store.GetArea(ctx, garden)
+	if a.Name != "garden work" || a.ParentID != 0 {
 		t.Errorf("edited area: %+v", a)
 	}
-	if got := labels(m); got[0] != "A:arrow" || got[1] != "P:work" || got[3] != "A:stf work" {
+	if got := labels(m); got[0] != "A:home" || got[1] != "P:work" || got[3] != "A:garden work" {
 		t.Errorf("rows after the move: %v", got)
 	}
 
 	// A new project from an area row lands in that area.
 	press(m, "g", "A")
 	pf, ok := m.form.(*projectForm)
-	if !ok || pf.area != arrow {
+	if !ok || pf.area != home {
 		t.Fatalf("project form = %T area=%d", m.form, pf.area)
 	}
 	typeText(m, "docs")
@@ -995,7 +995,7 @@ func TestAreaForms(t *testing.T) {
 	}
 	projects, _ := store.ListProjects(ctx, task.ProjectFilter{})
 	p := projects[len(projects)-1]
-	if p.Name != "docs" || p.AreaID != arrow {
+	if p.Name != "docs" || p.AreaID != home {
 		t.Errorf("saved project: %+v", p)
 	}
 	// Editing it and picking (none) moves it out.
@@ -1014,22 +1014,22 @@ func TestAreaForms(t *testing.T) {
 func TestDeleteArea(t *testing.T) {
 	m, store := setup(t, nil)
 	ctx := context.Background()
-	arrow, stf := withAreas(t, m, store)
+	home, garden := withAreas(t, m, store)
 	press(m, "j", "d")
-	if m.mode != modeConfirmDelete || !strings.Contains(plain(m), `delete area #2 "stf" and move what is in it up a level?`) {
+	if m.mode != modeConfirmDelete || !strings.Contains(plain(m), `delete area #2 "garden" and move what is in it up a level?`) {
 		t.Fatalf("d on an area: mode=%v\n%s", m.mode, plain(m))
 	}
 	press(m, "y")
 	if m.err != nil || m.status != "deleted area #2" {
 		t.Errorf("after delete: err=%v status=%q", m.err, m.status)
 	}
-	if _, err := store.GetArea(ctx, stf); err == nil {
+	if _, err := store.GetArea(ctx, garden); err == nil {
 		t.Error("area still there")
 	}
-	if p, _ := store.GetProject(ctx, 1); p.AreaID != arrow {
+	if p, _ := store.GetProject(ctx, 1); p.AreaID != home {
 		t.Errorf("house after the delete: area %d", p.AreaID)
 	}
-	if got := labels(m); !reflect.DeepEqual(got[:2], []string{"A:arrow", "P:house"}) {
+	if got := labels(m); !reflect.DeepEqual(got[:2], []string{"A:home", "P:house"}) {
 		t.Errorf("rows after the delete: %v", got)
 	}
 }

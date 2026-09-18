@@ -146,7 +146,7 @@ func goalIDsText(ids []int64) string {
 
 type projectDetail struct {
 	task.Project
-	Area  string          `json:"area,omitempty"` // the area's path, such as "arrow / stf"
+	Area  string          `json:"area,omitempty"` // the area's path, such as "home / garden"
 	Goals []goallink.Goal `json:"goals"`
 	Tasks []task.Task     `json:"tasks"`
 }

@@ -22,10 +22,10 @@ func addArea(t *testing.T, s *Store, in NewArea) Area {
 func TestAreaLifecycle(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
-	arrow := addArea(t, s, NewArea{Name: "  arrow "})
-	stf := addArea(t, s, NewArea{Name: "stf", ParentID: arrow.ID})
-	if arrow.Name != "arrow" || arrow.ParentID != 0 || stf.ParentID != arrow.ID {
-		t.Errorf("added: %+v %+v", arrow, stf)
+	home := addArea(t, s, NewArea{Name: "  home "})
+	garden := addArea(t, s, NewArea{Name: "garden", ParentID: home.ID})
+	if home.Name != "home" || home.ParentID != 0 || garden.ParentID != home.ID {
+		t.Errorf("added: %+v %+v", home, garden)
 	}
 	if _, err := s.AddArea(ctx, NewArea{Name: " "}); err == nil {
 		t.Error("blank name accepted")
@@ -37,30 +37,30 @@ func TestAreaLifecycle(t *testing.T) {
 		t.Errorf("GetArea(99): %v", err)
 	}
 	areas, err := s.ListAreas(ctx)
-	if err != nil || len(areas) != 2 || areas[0].ID != arrow.ID || areas[1].ID != stf.ID {
+	if err != nil || len(areas) != 2 || areas[0].ID != home.ID || areas[1].ID != garden.ID {
 		t.Fatalf("ListAreas = %+v, %v", areas, err)
 	}
-	if got := AreaPath(areas, stf.ID); got != "arrow / stf" {
+	if got := AreaPath(areas, garden.ID); got != "home / garden" {
 		t.Errorf("AreaPath = %q", got)
 	}
 	if got := AreaPath(areas, 99); got != "" {
 		t.Errorf("AreaPath(99) = %q", got)
 	}
 
-	name := "STF"
+	name := "GARDEN"
 	top := int64(0)
-	stf, err = s.UpdateArea(ctx, stf.ID, AreaEdit{Name: &name, ParentID: &top})
-	if err != nil || stf.Name != "STF" || stf.ParentID != 0 {
-		t.Errorf("UpdateArea = %+v, %v", stf, err)
+	garden, err = s.UpdateArea(ctx, garden.ID, AreaEdit{Name: &name, ParentID: &top})
+	if err != nil || garden.Name != "GARDEN" || garden.ParentID != 0 {
+		t.Errorf("UpdateArea = %+v, %v", garden, err)
 	}
-	// Moving arrow into STF is fine; then STF cannot go back into arrow.
-	if _, err := s.UpdateArea(ctx, arrow.ID, AreaEdit{ParentID: &stf.ID}); err != nil {
+	// Moving home into GARDEN is fine; then GARDEN cannot go back into home.
+	if _, err := s.UpdateArea(ctx, home.ID, AreaEdit{ParentID: &garden.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.UpdateArea(ctx, stf.ID, AreaEdit{ParentID: &arrow.ID}); err == nil || !strings.Contains(err.Error(), "inside itself") {
+	if _, err := s.UpdateArea(ctx, garden.ID, AreaEdit{ParentID: &home.ID}); err == nil || !strings.Contains(err.Error(), "inside itself") {
 		t.Errorf("cycle accepted: %v", err)
 	}
-	if _, err := s.UpdateArea(ctx, stf.ID, AreaEdit{ParentID: &stf.ID}); err == nil {
+	if _, err := s.UpdateArea(ctx, garden.ID, AreaEdit{ParentID: &garden.ID}); err == nil {
 		t.Error("self as parent accepted")
 	}
 	if _, err := s.UpdateArea(ctx, 99, AreaEdit{Name: &name}); !errors.Is(err, ErrNotFound) {
@@ -71,23 +71,23 @@ func TestAreaLifecycle(t *testing.T) {
 func TestProjectsInAreas(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
-	arrow := addArea(t, s, NewArea{Name: "arrow"})
-	stf := addArea(t, s, NewArea{Name: "stf", ParentID: arrow.ID})
-	p := addProject(t, s, NewProject{Name: "grant report", AreaID: stf.ID})
-	if p.AreaID != stf.ID {
+	home := addArea(t, s, NewArea{Name: "home"})
+	garden := addArea(t, s, NewArea{Name: "garden", ParentID: home.ID})
+	p := addProject(t, s, NewProject{Name: "grant report", AreaID: garden.ID})
+	if p.AreaID != garden.ID {
 		t.Errorf("AreaID = %d", p.AreaID)
 	}
 	if _, err := s.AddProject(ctx, NewProject{Name: "x", AreaID: 99}); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing area: %v", err)
 	}
 	got, _ := s.GetProject(ctx, p.ID)
-	if got.AreaID != stf.ID {
+	if got.AreaID != garden.ID {
 		t.Errorf("GetProject AreaID = %d", got.AreaID)
 	}
 	// An edit that says nothing about the area leaves it alone.
 	name := "grant report 2026"
 	got, err := s.UpdateProject(ctx, p.ID, ProjectEdit{Name: &name})
-	if err != nil || got.AreaID != stf.ID {
+	if err != nil || got.AreaID != garden.ID {
 		t.Errorf("after rename: %+v, %v", got, err)
 	}
 	none := int64(0)
@@ -104,10 +104,10 @@ func TestProjectsInAreas(t *testing.T) {
 func TestOutlineAndDeleteArea(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
-	arrow := addArea(t, s, NewArea{Name: "arrow"})
-	stf := addArea(t, s, NewArea{Name: "stf", ParentID: arrow.ID})
-	maint := addArea(t, s, NewArea{Name: "maintenance", ParentID: arrow.ID})
-	report := addProject(t, s, NewProject{Name: "grant report", AreaID: stf.ID})
+	home := addArea(t, s, NewArea{Name: "home"})
+	garden := addArea(t, s, NewArea{Name: "garden", ParentID: home.ID})
+	maint := addArea(t, s, NewArea{Name: "maintenance", ParentID: home.ID})
+	report := addProject(t, s, NewProject{Name: "grant report", AreaID: garden.ID})
 	addTask(t, s, NewTask{ProjectID: report.ID, Title: "draft"})
 	done := addTask(t, s, NewTask{ProjectID: report.ID, Title: "outline"})
 	check(t, s.MarkTask(ctx, done.ID, Finished))
@@ -119,45 +119,45 @@ func TestOutlineAndDeleteArea(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(o.Areas) != 1 || o.Areas[0].Area.ID != arrow.ID || len(o.Projects) != 1 || o.Projects[0].Project.ID != house.ID {
+	if len(o.Areas) != 1 || o.Areas[0].Area.ID != home.ID || len(o.Projects) != 1 || o.Projects[0].Project.ID != house.ID {
 		t.Fatalf("top level: %+v", o)
 	}
 	top := o.Areas[0]
-	if len(top.Areas) != 2 || top.Areas[0].Area.ID != stf.ID || top.Areas[1].Area.ID != maint.ID || len(top.Projects) != 0 {
-		t.Errorf("arrow: %+v", top)
+	if len(top.Areas) != 2 || top.Areas[0].Area.ID != garden.ID || top.Areas[1].Area.ID != maint.ID || len(top.Projects) != 0 {
+		t.Errorf("home: %+v", top)
 	}
 	if n := top.OpenTasks(); n != 2 {
-		t.Errorf("arrow open tasks = %d", n)
+		t.Errorf("home open tasks = %d", n)
 	}
 	if as, ps := top.Counts(); as != 2 || ps != 2 {
-		t.Errorf("arrow counts = %d areas, %d projects", as, ps)
+		t.Errorf("home counts = %d areas, %d projects", as, ps)
 	}
-	node, ok := o.Find(stf.ID)
+	node, ok := o.Find(garden.ID)
 	if !ok || len(node.Projects) != 1 || node.Projects[0].Project.ID != report.ID || len(node.Projects[0].Tasks) != 1 {
-		t.Errorf("Find(stf) = %+v, %v", node, ok)
+		t.Errorf("Find(garden) = %+v, %v", node, ok)
 	}
 	if _, ok := o.Find(99); ok {
 		t.Error("Find(99) found something")
 	}
 
-	// Deleting stf moves the report up into arrow.
-	check(t, s.DeleteArea(ctx, stf.ID))
-	if err := s.DeleteArea(ctx, stf.ID); !errors.Is(err, ErrNotFound) {
+	// Deleting garden moves the report up into home.
+	check(t, s.DeleteArea(ctx, garden.ID))
+	if err := s.DeleteArea(ctx, garden.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("second delete: %v", err)
 	}
 	got, _ := s.GetProject(ctx, report.ID)
-	if got.AreaID != arrow.ID {
+	if got.AreaID != home.ID {
 		t.Errorf("report after delete: area %d", got.AreaID)
 	}
-	// Deleting arrow moves maintenance and the report to the top level.
-	check(t, s.DeleteArea(ctx, arrow.ID))
+	// Deleting home moves maintenance and the report to the top level.
+	check(t, s.DeleteArea(ctx, home.ID))
 	areas, _ := s.ListAreas(ctx)
 	if len(areas) != 1 || areas[0].ID != maint.ID || areas[0].ParentID != 0 {
 		t.Errorf("areas after delete: %+v", areas)
 	}
 	got, _ = s.GetProject(ctx, report.ID)
 	if got.AreaID != 0 {
-		t.Errorf("report after deleting arrow: area %d", got.AreaID)
+		t.Errorf("report after deleting home: area %d", got.AreaID)
 	}
 }
 
