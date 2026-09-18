@@ -43,7 +43,7 @@ A project · a task · s subtask · e edit · space next status/tick · x drop �
    "maintenance" with projects inside each. Fold an area or a project
    when what is in it is in the way.
 
-The design notes behind this, in the owner's own words, are in
+The design notes behind this are in
 [docs/design/tasks.md](docs/design/tasks.md).
 
 ## Quick Start
