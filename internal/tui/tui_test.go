@@ -211,7 +211,7 @@ func labels(m *model) []string {
 		case rowSubtask:
 			out = append(out, "S:"+r.subtask.Title)
 		case rowHeading:
-			out = append(out, "H:"+r.heading)
+			out = append(out, "H:"+r.bucket.String())
 		}
 	}
 	return out
@@ -431,66 +431,111 @@ func TestDeadlineView(t *testing.T) {
 	if m.view != viewDeadline || !strings.Contains(m.status, "by deadline") {
 		t.Fatalf("v did not switch to the deadline view: view=%v status=%q", m.view, m.status)
 	}
-	// Every task, soonest due first, undated last, subtasks under their
-	// task, under a heading for how soon; the cursor starts on a task.
+	// Every open task, soonest due first, undated last, subtasks under
+	// their task, under a heading for how soon; the cursor is on the task
+	// it was on.
 	want := []string{"H:Overdue", "T:paint the hall", "S:buy paint", "S:move furniture", "H:Next 7 days", "T:fix the gate", "H:No deadline", "T:email accountant"}
 	if got := labels(m); !reflect.DeepEqual(got, want) {
 		t.Errorf("deadline rows = %v\nwant   %v", got, want)
 	}
-	if r, ok := m.selected(); !ok || r.task.Task.Title != "paint the hall" {
-		t.Errorf("cursor after v: %d %v", m.cursor, r.target())
-	}
-	// Movement skips the headings.
-	press(m, "k")
-	if m.cursor != 1 {
-		t.Errorf("k at the first task: cursor %d", m.cursor)
-	}
-	press(m, "j", "j", "j")
-	if r, _ := m.selected(); r.task.Task.Title != "fix the gate" || m.cursor != 5 {
-		t.Errorf("j over a heading: cursor %d %v", m.cursor, r.target())
-	}
-	press(m, "k")
-	if m.cursor != 3 {
-		t.Errorf("k back over a heading: cursor %d", m.cursor)
-	}
-	press(m, "G")
-	if r, _ := m.selected(); r.task.Task.Title != "email accountant" {
-		t.Errorf("G: %v", r.target())
-	}
-	press(m, "j", "g")
-	if m.cursor != 1 {
-		t.Errorf("g lands on the first task: cursor %d", m.cursor)
+	press(m, "g")
+	if r, ok := m.selected(); !ok || r.kind != rowHeading || r.bucket != bucketOverdue {
+		t.Errorf("g: %d %v", m.cursor, r.target())
 	}
 	view := plain(m)
-	for _, want := range []string{"tasktracker · by deadline", "paint the hall  house", "  [x] buy paint", "v by project", "Overdue", "Next 7 days", "No deadline"} {
+	for _, want := range []string{"tasktracker · by deadline", "paint the hall  house", "  [x] buy paint", "v by project", "▾ Overdue", "1 task", "▾ Next 7 days", "▾ No deadline", "before 2026-09-17", "tasks 1 open", "fold/unfold"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("deadline view missing %q:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "fold") {
-		t.Errorf("help by deadline offers folding:\n%s", view)
+	// Keys that act on a task say so on a heading.
+	for _, k := range []string{"space", "x", "z", "d", "e"} {
+		press(m, k)
+		if m.mode != modeBrowse || !strings.Contains(m.status, "headings group tasks") {
+			t.Errorf("%s on a heading: mode=%v status=%q", k, m.mode, m.status)
+		}
 	}
-	press(m, "left")
-	if !strings.Contains(m.status, "v goes back") {
-		t.Errorf("fold in the deadline view: %q", m.status)
+	// z on an open task says where it can be archived once finished,
+	// since a finished task leaves this list.
+	press(m, "j", "z") // paint the hall
+	if tk, _ := store.GetTask(ctx, 1); tk.Archived || !strings.Contains(m.status, "then z in by project archives it") {
+		t.Errorf("z on open task by deadline: archived=%v status=%q", tk.Archived, m.status)
 	}
-	// A finished task is no longer due: it moves to the end under
-	// Finished, greyed, with the cursor, until archived.
-	press(m, "space", "space")
-	finished := []string{"H:Next 7 days", "T:fix the gate", "H:No deadline", "T:email accountant", "H:Finished", "T:paint the hall", "S:buy paint", "S:move furniture"}
-	if got := labels(m); !reflect.DeepEqual(got, finished) || !strings.Contains(m.status, "z archives it") {
+	press(m, "g", "a")
+	if m.mode != modeBrowse || !strings.Contains(m.status, "select a task") {
+		t.Errorf("a on a heading: mode=%v status=%q", m.mode, m.status)
+	}
+	// A heading is in no area, so a new project from one starts at the top.
+	home, err := store.AddArea(ctx, task.NewArea{Name: "home"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateProject(ctx, 1, task.ProjectEdit{AreaID: &home.ID}); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "r", "g", "A")
+	if pf, ok := m.form.(*projectForm); !ok || pf.area != 0 {
+		t.Errorf("A on a heading: form=%T area=%v", m.form, m.form)
+	}
+	press(m, "esc", "j", "A") // paint the hall, in house, now in home
+	if pf, ok := m.form.(*projectForm); !ok || pf.area != home.ID {
+		t.Errorf("A on a task: form=%T", m.form)
+	}
+	press(m, "esc")
+	none := int64(0)
+	if _, err := store.UpdateProject(ctx, 1, task.ProjectEdit{AreaID: &none}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DeleteArea(ctx, home.ID); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "r", "g")
+	// A finished task is not due any more: it leaves this list, and the
+	// status says where it went.
+	press(m, "j", "space", "space")
+	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Next 7 days", "T:fix the gate", "H:No deadline", "T:email accountant"}) || !strings.Contains(m.status, "by project shows it until archived") {
 		t.Errorf("after finishing: rows=%v status=%q", got, m.status)
 	}
-	if r, ok := m.selected(); !ok || r.task.Task.Title != "paint the hall" || !strings.Contains(plain(m), "Finished") {
-		t.Errorf("cursor after finishing: %d %v", m.cursor, r.target())
+	if r, ok := m.selected(); !ok || r.task.Task.Title != "fix the gate" {
+		t.Errorf("cursor after the task went: %d %v", m.cursor, r.target())
 	}
-	press(m, "z") // its heading goes with it; the cursor settles on a task
-	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Next 7 days", "T:fix the gate", "H:No deadline", "T:email accountant"}) || !strings.Contains(m.status, "f shows archived") {
-		t.Errorf("after archiving: rows=%v status=%q", got, m.status)
+	// v from a finished task, which has no row here, lands on the first
+	// task listed from its project.
+	press(m, "v", "g", "j") // paint the hall, done, in house
+	if r, _ := m.selected(); r.target() != (target{rowTask, 1}) {
+		t.Fatalf("tree cursor: %v", r.target())
 	}
-	if r, ok := m.selected(); !ok || r.task.Task.Title != "email accountant" {
-		t.Errorf("cursor after the heading went: %d %v", m.cursor, r.target())
+	press(m, "v")
+	if r, _ := m.selected(); r.target() != (target{rowTask, 2}) {
+		t.Errorf("v from a finished task: %v", r.target())
 	}
+	// f never brings finished tasks here; it adds open tasks in finished
+	// projects, and the status says so.
+	old, err := store.AddProject(ctx, task.NewProject{Name: "old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddTask(ctx, task.NewTask{ProjectID: old.ID, Title: "leftover"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkProject(ctx, old.ID, task.Done); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "f")
+	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Next 7 days", "T:fix the gate", "H:No deadline", "T:email accountant", "T:leftover"}) || !strings.Contains(m.status, "adds open tasks in finished projects") {
+		t.Errorf("with archived shown: %v status=%q", got, m.status)
+	}
+	if strings.Contains(plain(m), "Overdue") {
+		t.Errorf("a finished task listed with f:\n%s", plain(m))
+	}
+	press(m, "f")
+	if got := labels(m); len(got) != 4 || !strings.Contains(m.status, "drops open tasks in finished projects") {
+		t.Errorf("with archived hidden again: %v status=%q", got, m.status)
+	}
+	if err := store.DeleteProject(ctx, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "r")
 	// A date change moves a task; an undated one goes to the end.
 	later := "2026-12-01"
 	if _, err := store.UpdateTask(ctx, 2, task.TaskEdit{Due: &later}); err != nil {
@@ -504,16 +549,9 @@ func TestDeadlineView(t *testing.T) {
 	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Next 7 days", "T:email accountant", "H:Longer", "T:fix the gate"}) {
 		t.Errorf("after date changes: %v", got)
 	}
-	press(m, "f") // the archived task is finished, so it is last, not overdue
-	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Next 7 days", "T:email accountant", "H:Longer", "T:fix the gate", "H:Finished", "T:paint the hall", "S:buy paint", "S:move furniture"}) {
-		t.Errorf("with archived shown: %v", got)
-	}
-	if strings.Contains(plain(m), "Overdue") {
-		t.Errorf("a finished task counted as overdue:\n%s", plain(m))
-	}
 	// Saving by deadline leaves the tree's folds alone: fold house first.
 	m.collapsed[target{rowProject, 1}] = true
-	press(m, "f", "G", "a") // a adds under the selected task's project
+	press(m, "G", "a") // a adds under the selected task's project
 	if m.mode != modeForm {
 		t.Fatal("a did not open the form in the deadline view")
 	}
@@ -544,7 +582,7 @@ func TestDeadlineView(t *testing.T) {
 		}
 	}
 	press(m, "r")
-	if len(m.rows) != 0 || !strings.Contains(plain(m), "no tasks") {
+	if len(m.rows) != 0 || !strings.Contains(plain(m), "no open tasks") {
 		t.Errorf("empty deadline view: rows=%d\n%s", len(m.rows), plain(m))
 	}
 	press(m, "a")
@@ -554,6 +592,170 @@ func TestDeadlineView(t *testing.T) {
 	press(m, "v")
 	if m.view != viewTree || len(m.rows) == 0 || m.status != "by project" {
 		t.Errorf("v did not go back: view=%v rows=%d status=%q", m.view, len(m.rows), m.status)
+	}
+}
+
+// TestDeadlineFold folds headings with the arrows, as areas fold in the
+// tree: on a heading, or on a task under it. Folds last across switches
+// between the views, and saving a task under a folded heading opens it.
+func TestDeadlineFold(t *testing.T) {
+	m, store := setup(t, nil)
+	ctx := context.Background()
+	press(m, "v", "g", "left") // on Overdue
+	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Overdue", "H:Next 7 days", "T:fix the gate", "H:No deadline", "T:email accountant"}) || m.status != "collapsed Overdue; ← shows its tasks again" {
+		t.Errorf("fold on a heading: rows=%v status=%q", got, m.status)
+	}
+	view := plain(m)
+	if !strings.Contains(view, "▸ Overdue") || !strings.Contains(view, "collapsed; ← shows its tasks") {
+		t.Errorf("folded heading view:\n%s", view)
+	}
+	press(m, "j", "j", "right") // on fix the gate: folds Next 7 days and moves there
+	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Overdue", "H:Next 7 days", "H:No deadline", "T:email accountant"}) || m.cursor != 1 {
+		t.Errorf("fold from a task: rows=%v cursor=%d", got, m.cursor)
+	}
+	// Folds survive a switch to by project and back, and are not pruned.
+	// v from a heading lands on the first task in the tree due about as
+	// soon; v back from that task, folded away here, lands on the heading.
+	press(m, "v")
+	if r, _ := m.selected(); r.target() != (target{rowTask, 2}) {
+		t.Errorf("v from the Next 7 days heading: %v", r.target())
+	}
+	press(m, "v")
+	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Overdue", "H:Next 7 days", "H:No deadline", "T:email accountant"}) {
+		t.Errorf("after v v: %v", got)
+	}
+	if r, _ := m.selected(); r.target() != (target{rowHeading, int64(bucketWeek)}) {
+		t.Errorf("v back onto a folded heading: %v", r.target())
+	}
+	// v from a heading lands on its first task in the tree, or on that
+	// task's project when the task is folded away there.
+	press(m, "g", "v")
+	if r, _ := m.selected(); r.target() != (target{rowTask, 1}) {
+		t.Errorf("v from Overdue: %v", r.target())
+	}
+	press(m, "v")
+	m.collapsed[target{rowProject, 1}] = true
+	press(m, "g", "v")
+	if r, _ := m.selected(); r.target() != (target{rowProject, 1}) {
+		t.Errorf("v from Overdue with its task folded away: %d %v", m.cursor, r.target())
+	}
+	delete(m.collapsed, target{rowProject, 1})
+	press(m, "v")
+	if err := store.MarkTask(ctx, 1, task.Finished); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "r", "g")
+	if r, _ := m.selected(); r.kind != rowHeading || r.bucket != bucketWeek {
+		t.Fatalf("Overdue should be gone: %v", labels(m))
+	}
+	if err := store.MarkTask(ctx, 1, task.Todo); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "r", "g")
+	// f says this list has open tasks only.
+	press(m, "f")
+	if !strings.Contains(m.status, "adds open tasks in finished projects") {
+		t.Errorf("f by deadline: %q", m.status)
+	}
+	press(m, "f")
+	// Saving a task that lands under a folded heading opens the heading.
+	press(m, "G", "e") // email accountant: give it a date within the week
+	press(m, "enter")
+	typeText(m, "tomorrow")
+	press(m, "enter", "enter", "enter")
+	if m.mode != modeBrowse || m.err != nil {
+		t.Fatalf("form: mode=%v err=%v", m.mode, m.err)
+	}
+	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Overdue", "H:Next 7 days", "T:email accountant", "T:fix the gate"}) {
+		t.Errorf("after saving under a folded heading: %v", got)
+	}
+	if r, _ := m.selected(); r.target() != (target{rowTask, 3}) {
+		t.Errorf("cursor after save: %v", r.target())
+	}
+	// Unfolding a heading shows its tasks again. A fold on a heading that
+	// has since emptied is kept, not pruned: the heading comes back folded
+	// when a task lands in its bucket again, and can be undone then.
+	press(m, "g", "left")
+	if got := labels(m); got[1] != "T:paint the hall" || m.status != "expanded Overdue" {
+		t.Errorf("unfold: rows=%v status=%q", got, m.status)
+	}
+	press(m, "left")
+	if err := store.MarkTask(ctx, 1, task.Finished); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "r")
+	if got := labels(m); got[0] != "H:Next 7 days" || !m.collapsed[target{rowHeading, int64(bucketOverdue)}] {
+		t.Errorf("empty bucket kept its heading or lost its fold: %v", got)
+	}
+	press(m, "v", "v")
+	if !m.collapsed[target{rowHeading, int64(bucketOverdue)}] {
+		t.Error("a heading fold was pruned by a reload")
+	}
+	if err := store.MarkTask(ctx, 1, task.Todo); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "r", "g")
+	if got := labels(m); got[0] != "H:Overdue" || got[1] != "H:Next 7 days" || !strings.Contains(plain(m), "▸ Overdue") {
+		t.Errorf("heading back after its bucket refilled: %v", got)
+	}
+	press(m, "left")
+	if got := labels(m); got[1] != "T:paint the hall" || m.status != "expanded Overdue" {
+		t.Errorf("unfold after refilling: rows=%v status=%q", got, m.status)
+	}
+}
+
+// TestLandByDeadlineFolded switches to by deadline from a project whose
+// only open task is under a folded heading: the cursor lands on that
+// heading rather than at the top.
+func TestLandByDeadlineFolded(t *testing.T) {
+	m, store := setup(t, nil)
+	m.collapsed[target{rowHeading, int64(bucketNone)}] = true
+	m.selectTarget(target{rowProject, 2}) // work: email accountant, undated
+	press(m, "v")
+	if r, _ := m.selected(); r.target() != (target{rowHeading, int64(bucketNone)}) {
+		t.Errorf("v from work with No deadline folded: %d %v", m.cursor, r.target())
+	}
+	press(m, "v")
+	m.selectTarget(target{rowProject, 1}) // house: paint the hall is listed under Overdue
+	press(m, "v")
+	if r, _ := m.selected(); r.target() != (target{rowTask, 1}) {
+		t.Errorf("v from house: %v", r.target())
+	}
+	// From a project the landing is its soonest due task, whatever the
+	// tree order: work lists email accountant (undated) before urgent.
+	delete(m.collapsed, target{rowHeading, int64(bucketNone)})
+	urgent, err := store.AddTask(context.Background(), task.NewTask{ProjectID: 2, Title: "urgent", Due: "2026-09-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	press(m, "v", "r")
+	m.selectTarget(target{rowProject, 2})
+	press(m, "v")
+	if r, _ := m.selected(); r.target() != (target{rowTask, urgent.ID}) {
+		t.Errorf("v from work: %v, want its overdue task", r.target())
+	}
+	// With both of work's headings folded, the landing is the heading of
+	// its soonest due task, again whatever the tree order.
+	m.collapsed[target{rowHeading, int64(bucketNone)}] = true
+	m.collapsed[target{rowHeading, int64(bucketOverdue)}] = true
+	press(m, "v")
+	m.selectTarget(target{rowProject, 2})
+	press(m, "v")
+	if r, _ := m.selected(); r.target() != (target{rowHeading, int64(bucketOverdue)}) {
+		t.Errorf("v from work with its headings folded: %v %v", r.target(), labels(m))
+	}
+	delete(m.collapsed, target{rowHeading, int64(bucketNone)})
+	delete(m.collapsed, target{rowHeading, int64(bucketOverdue)})
+	press(m, "v", "v", "g", "j") // back on urgent
+	// Finishing a task whose group is followed by a heading leaves the
+	// cursor on the next task, not the heading.
+	press(m, "j") // paint the hall: last group under Overdue, before Next 7 days
+	if r, _ := m.selected(); r.target() != (target{rowTask, 1}) {
+		t.Fatalf("cursor before finishing: %d %v %v", m.cursor, r.target(), labels(m))
+	}
+	press(m, "space", "space")
+	if r, _ := m.selected(); r.target() != (target{rowTask, 2}) || labels(m)[m.cursor-1] != "H:Next 7 days" {
+		t.Errorf("cursor after finishing before a heading: %d %v %v", m.cursor, r.target(), labels(m))
 	}
 }
 
@@ -739,8 +941,8 @@ func TestDeadlineOrder(t *testing.T) {
 	press(m, "r")
 	m.selectTarget(target{rowProject, empty.ID})
 	press(m, "v")
-	if m.cursor != 1 {
-		t.Errorf("v from an empty project: cursor %d, want the first task", m.cursor)
+	if m.cursor != 0 {
+		t.Errorf("v from an empty project: cursor %d, want the top", m.cursor)
 	}
 	press(m, "A") // a project saved by deadline has no row here
 	typeText(m, "fence")
@@ -750,30 +952,39 @@ func TestDeadlineOrder(t *testing.T) {
 	}
 }
 
-func TestDeadlineHeading(t *testing.T) {
-	if got := deadlineHeading("2026-09-16", true, fixed); got != "Finished" {
-		t.Errorf("finished task with a past date = %q", got)
-	}
-	cases := map[string]string{
-		"":           "No deadline",
-		"2026-09-16": "Overdue",
-		"2026-09-17": "Next 7 days",
-		"2026-09-23": "Next 7 days",
-		"2026-09-24": "Next 30 days",
-		"2026-10-16": "Next 30 days",
-		"2026-10-17": "Longer",
-		"2027-01-01": "Longer",
+func TestBucketOf(t *testing.T) {
+	cases := map[string]bucket{
+		"":           bucketNone,
+		"2026-09-16": bucketOverdue,
+		"2026-09-17": bucketWeek,
+		"2026-09-23": bucketWeek,
+		"2026-09-24": bucketMonth,
+		"2026-10-16": bucketMonth,
+		"2026-10-17": bucketLonger,
+		"2027-01-01": bucketLonger,
 	}
 	for due, want := range cases {
-		if got := deadlineHeading(due, false, fixed); got != want {
-			t.Errorf("deadlineHeading(%q) = %q, want %q", due, got, want)
+		if got := bucketOf(due, fixed); got != want {
+			t.Errorf("bucketOf(%q) = %v, want %v", due, got, want)
+		}
+	}
+	spans := map[bucket]string{
+		bucketOverdue: "before 2026-09-17",
+		bucketWeek:    "2026-09-17 to 2026-09-23",
+		bucketMonth:   "2026-09-24 to 2026-10-16",
+		bucketLonger:  "from 2026-10-17",
+		bucketNone:    "no due date",
+	}
+	for b, want := range spans {
+		if got := b.span(fixed); got != want {
+			t.Errorf("%v span = %q, want %q", b, got, want)
 		}
 	}
 }
 
 func TestDeadlineViewRowStyling(t *testing.T) {
 	m, _ := setup(t, nil)
-	press(m, "v", "j", "j", "j") // fix the gate selected; paint the hall is overdue and unselected
+	press(m, "v", "j", "j", "j", "j") // fix the gate selected, past its heading; paint the hall is overdue and unselected
 	view := m.View().Content
 	lines := strings.Split(view, "\n")
 	var overdue, selected string
@@ -1190,10 +1401,10 @@ func TestCollapse(t *testing.T) {
 		t.Errorf("left on an empty project: %q", m.status)
 	}
 
-	// There is nothing to fold by deadline.
-	press(m, "v", "left")
-	if !strings.Contains(m.status, "v goes back") {
-		t.Errorf("left in the deadline view: %q", m.status)
+	// By deadline, the arrows fold headings.
+	press(m, "v", "g", "left", "left") // fold and unfold a heading
+	if !strings.HasPrefix(m.status, "expanded ") {
+		t.Errorf("left twice in the deadline view: %q", m.status)
 	}
 	press(m, "v")
 

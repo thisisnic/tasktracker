@@ -76,14 +76,14 @@ const (
 	rowProject
 	rowTask
 	rowSubtask
-	rowHeading // a label over a group of tasks by deadline; never selected
+	rowHeading // a group of tasks by deadline: how soon they are due
 )
 
-// row is one line in the left pane. Area is set for area rows. Project is
-// set for every project, task and subtask row: the project the row belongs
-// to. Task is set for task and subtask rows. Depth is how many areas the
-// row is inside, and sets its indent. A heading row has only its name and
-// how many tasks are under it.
+// row is one selectable line in the left pane. Area is set for area rows.
+// Project is set for every project, task and subtask row: the project the
+// row belongs to. Task is set for task and subtask rows. Depth is how many
+// areas the row is inside, and sets its indent. A heading row has the
+// bucket it stands for and how many tasks are in it.
 type row struct {
 	kind    rowKind
 	depth   int
@@ -91,8 +91,67 @@ type row struct {
 	project task.ProjectNode
 	task    task.TaskNode
 	subtask task.Subtask
-	heading string
+	bucket  bucket
 	count   int
+}
+
+// bucket is how soon a task is due, for the by-deadline headings. The
+// values are the headings' ids in the fold map, so they never change.
+type bucket int64
+
+const (
+	bucketOverdue bucket = iota + 1
+	bucketWeek
+	bucketMonth
+	bucketLonger
+	bucketNone
+)
+
+func (b bucket) String() string {
+	switch b {
+	case bucketOverdue:
+		return "Overdue"
+	case bucketWeek:
+		return "Next 7 days"
+	case bucketMonth:
+		return "Next 30 days"
+	case bucketLonger:
+		return "Longer"
+	}
+	return "No deadline"
+}
+
+// bucketOf says how soon a due date is. The next 7 days start today; the
+// next 30 start where the 7 end.
+func bucketOf(due string, today time.Time) bucket {
+	days, ok := task.Task{Due: due}.DaysUntilDue(today)
+	switch {
+	case !ok:
+		return bucketNone
+	case days < 0:
+		return bucketOverdue
+	case days < 7:
+		return bucketWeek
+	case days < 30:
+		return bucketMonth
+	}
+	return bucketLonger
+}
+
+// span says which dates a bucket covers, for the detail pane.
+func (b bucket) span(today time.Time) string {
+	day := func(n int) string { return today.AddDate(0, 0, n).Format("2006-01-02") }
+	switch b {
+	case bucketOverdue:
+		return "before " + day(0)
+	case bucketWeek:
+		return day(0) + " to " + day(6)
+	case bucketMonth:
+		return day(7) + " to " + day(29)
+	case bucketLonger:
+		return "from " + day(30)
+	}
+	return "no due date"
 }
 
 // target names the row to select after a change: a kind and an id.
@@ -171,23 +230,38 @@ func (m *model) reload() error {
 		return err
 	}
 	m.rebuildRows()
-	defer m.settle()
-	if keep != nil && !m.selectTarget(*keep) {
-		// The row is still there but folded away, as when switching back
-		// to by project from a task inside a folded project: land on the
-		// nearest container that is listed, innermost first. A row that is
-		// gone altogether has no containers, and the cursor stays put.
-		cs := m.containers(*keep)
-		for i := len(cs) - 1; i >= 0; i-- {
-			if m.selectTarget(cs[i]) {
-				break
+	if keep != nil && !m.selectNear(*keep) && m.view == viewDeadline {
+		// The row is gone from the list, as when a task is finished here.
+		// The cursor keeps its place; if the heading of the next bucket
+		// slid into it, prefer the next task, or the one before, so the
+		// hand stays on tasks rather than on whatever moved up.
+		m.clampCursor()
+		if r, ok := m.selected(); ok && r.kind == rowHeading {
+			if !m.stepToTask(1) {
+				m.stepToTask(-1)
 			}
 		}
 	}
+	m.clampCursor()
+	return nil
+}
+
+func (m *model) clampCursor() {
 	if m.cursor >= len(m.rows) {
 		m.cursor = max(0, len(m.rows)-1)
 	}
-	return nil
+}
+
+// stepToTask moves the cursor to the next task row (dir 1) or the
+// previous one (dir -1) and reports whether there was one.
+func (m *model) stepToTask(dir int) bool {
+	for i := m.cursor + dir; i >= 0 && i < len(m.rows); i += dir {
+		if m.rows[i].kind == rowTask {
+			m.cursor = i
+			return true
+		}
+	}
+	return false
 }
 
 // pruneFolds forgets folds on areas and projects that have been deleted,
@@ -211,7 +285,7 @@ func (m *model) pruneFolds() error {
 		present[target{rowProject, p.ID}] = true
 	}
 	for t := range m.collapsed {
-		if !present[t] {
+		if t.kind != rowHeading && !present[t] {
 			delete(m.collapsed, t)
 		}
 	}
@@ -221,9 +295,10 @@ func (m *model) pruneFolds() error {
 // rebuildRows flattens the outline for the current view. By project, the
 // rows are an area's areas, then its projects, each indented one step
 // deeper, skipping what is inside a collapsed area or project. By
-// deadline, the rows are every task with its subtasks under it, with no
-// area or project rows, soonest due first and undated tasks last, under
-// a heading for how soon they are due.
+// deadline, the rows are every open task with its subtasks under it,
+// with no area or project rows, soonest due first and undated tasks last,
+// under a heading for how soon they are due, skipping what is inside a
+// collapsed heading.
 func (m *model) rebuildRows() {
 	m.rows = m.rows[:0]
 	if m.view == viewDeadline {
@@ -256,104 +331,52 @@ func (m *model) rebuildRows() {
 	walk(areas, projects, 0)
 }
 
-// deadlineRows lists every task in the outline with its subtasks, ordered
-// by due date with undated tasks last, and a heading over each run of
-// tasks due about as soon: overdue, the next 7 days, the next 30, longer,
-// and no deadline. Done and dropped tasks are not coming up, so they go
-// last under a heading of their own, until archived. Tasks due the same
-// day, and undated ones, keep their by-project order, so the list is
-// stable across reloads.
+// deadlineRows lists every open task in the outline with its subtasks,
+// ordered by due date with undated tasks last, under a heading for each
+// bucket that has any: overdue, the next 7 days, the next 30, longer, and
+// no deadline. A collapsed heading keeps its tasks out of the rows. Done
+// and dropped tasks are not coming up, so they are left out; the
+// by-project view keeps them until archived. Tasks due the same day, and
+// undated ones, keep their by-project order, so the list is stable across
+// reloads.
 func (m *model) deadlineRows() []row {
 	type group struct {
-		due      string
-		finished bool
-		rows     []row
+		due  string
+		rows []row
 	}
 	var groups []group
-	var walk func(areas []task.AreaNode, projects []task.ProjectNode)
-	walk = func(areas []task.AreaNode, projects []task.ProjectNode) {
-		for _, a := range areas {
-			walk(a.Areas, a.Projects)
-		}
-		for _, p := range projects {
-			for _, t := range p.Tasks {
-				g := group{due: t.Task.Due, finished: !t.Task.Open(), rows: []row{{kind: rowTask, project: p, task: t}}}
-				for _, s := range t.Subtasks {
-					g.rows = append(g.rows, row{kind: rowSubtask, project: p, task: t, subtask: s})
-				}
-				groups = append(groups, g)
+	m.eachTask(func(p task.ProjectNode, t task.TaskNode) bool {
+		if t.Task.Open() {
+			g := group{due: t.Task.Due, rows: []row{{kind: rowTask, project: p, task: t}}}
+			for _, s := range t.Subtasks {
+				g.rows = append(g.rows, row{kind: rowSubtask, project: p, task: t, subtask: s})
 			}
+			groups = append(groups, g)
 		}
-	}
-	walk(m.outline.Areas, m.outline.Projects)
-	sort.SliceStable(groups, func(i, j int) bool {
-		if groups[i].finished != groups[j].finished {
-			return !groups[i].finished
-		}
-		a, b := groups[i].due, groups[j].due
-		if a == "" || b == "" {
-			return a != "" && b == ""
-		}
-		return a < b
+		return true
 	})
-	// Groups are in heading order, so each heading's tasks are one run.
+	sort.SliceStable(groups, func(i, j int) bool {
+		return sooner(task.Task{Due: groups[i].due}, task.Task{Due: groups[j].due})
+	})
+	// Groups are in bucket order, so each heading's tasks are one run.
 	today := m.now()
-	counts := map[string]int{}
+	counts := map[bucket]int{}
 	for _, g := range groups {
-		counts[deadlineHeading(g.due, g.finished, today)]++
+		counts[bucketOf(g.due, today)]++
 	}
 	var rows []row
-	last := ""
+	var last bucket
 	for _, g := range groups {
-		if h := deadlineHeading(g.due, g.finished, today); h != last {
-			rows = append(rows, row{kind: rowHeading, heading: h, count: counts[h]})
-			last = h
+		b := bucketOf(g.due, today)
+		if b != last {
+			rows = append(rows, row{kind: rowHeading, bucket: b, count: counts[b]})
+			last = b
 		}
-		rows = append(rows, g.rows...)
+		if !m.collapsed[target{rowHeading, int64(b)}] {
+			rows = append(rows, g.rows...)
+		}
 	}
 	return rows
-}
-
-// deadlineHeading names how soon a due date is, for a task that is still
-// open. The next 7 days start today; the next 30 start where the 7 end. A
-// finished task is not due at all, whatever its date.
-func deadlineHeading(due string, finished bool, today time.Time) string {
-	days, ok := task.Task{Due: due}.DaysUntilDue(today)
-	switch {
-	case finished:
-		return "Finished"
-	case !ok:
-		return "No deadline"
-	case days < 0:
-		return "Overdue"
-	case days < 7:
-		return "Next 7 days"
-	case days < 30:
-		return "Next 30 days"
-	}
-	return "Longer"
-}
-
-// settle moves the cursor off a heading, which is never selected, to the
-// task below it. A heading is always followed by a task, so there is one.
-// The cursor rests on a heading only after a change that moved or removed
-// the row it was on.
-func (m *model) settle() {
-	if m.cursor < len(m.rows) && m.rows[m.cursor].kind == rowHeading {
-		m.step(1)
-	}
-}
-
-// step moves the cursor one selectable row down (dir 1) or up (dir -1),
-// skipping headings, and reports whether there was one to move to.
-func (m *model) step(dir int) bool {
-	for i := m.cursor + dir; i >= 0 && i < len(m.rows); i += dir {
-		if m.rows[i].kind != rowHeading {
-			m.cursor = i
-			return true
-		}
-	}
-	return false
 }
 
 func (r row) target() target {
@@ -365,9 +388,14 @@ func (r row) target() target {
 	case rowSubtask:
 		return target{rowSubtask, r.subtask.ID}
 	case rowHeading:
-		return target{rowHeading, 0}
+		return target{rowHeading, int64(r.bucket)}
 	}
 	return target{rowProject, r.project.Project.ID}
+}
+
+// headingOf is the by-deadline heading a task or subtask row is under.
+func (m *model) headingOf(r row) target {
+	return target{rowHeading, int64(bucketOf(r.task.Task.Due, m.now()))}
 }
 
 // areaOf is the area a row is in: the area itself for an area row, and
@@ -382,6 +410,32 @@ func (r row) areaOf() int64 {
 // areaPath names an area by its ancestry, or "" for none.
 func (m *model) areaPath(id int64) string { return task.AreaPath(m.areas, id) }
 
+// selectNear moves the cursor to the row for t, or when that row is
+// folded away, as when switching back to by project from a task inside
+// a folded project, to the nearest container that is listed, innermost
+// first. By deadline that is the task's heading. It reports whether the
+// cursor moved; a row that is gone altogether has no containers, and the
+// cursor stays put.
+func (m *model) selectNear(t target) bool {
+	if m.selectTarget(t) {
+		return true
+	}
+	var cs []target
+	if m.view == viewDeadline {
+		if h, ok := m.deadlineContainer(t); ok {
+			cs = []target{h}
+		}
+	} else {
+		cs = m.containers(t)
+	}
+	for i := len(cs) - 1; i >= 0; i-- {
+		if m.selectTarget(cs[i]) {
+			return true
+		}
+	}
+	return false
+}
+
 // selectTarget moves the cursor to the row for t and reports whether it
 // found one. When t is gone, for instance because it was just hidden, the
 // cursor stays where it is.
@@ -395,10 +449,8 @@ func (m *model) selectTarget(t target) bool {
 	return false
 }
 
-// selected is the row under the cursor. A heading is not something to act
-// on, so it counts as nothing selected.
 func (m *model) selected() (row, bool) {
-	if len(m.rows) == 0 || m.cursor >= len(m.rows) || m.rows[m.cursor].kind == rowHeading {
+	if len(m.rows) == 0 || m.cursor >= len(m.rows) {
 		return row{}, false
 	}
 	return m.rows[m.cursor], true
@@ -539,15 +591,17 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c", "esc":
 		return m, tea.Quit
 	case "j", "down":
-		m.step(1)
+		if m.cursor < len(m.rows)-1 {
+			m.cursor++
+		}
 	case "k", "up":
-		m.step(-1)
+		if m.cursor > 0 {
+			m.cursor--
+		}
 	case "g", "home":
 		m.cursor = 0
-		m.settle()
 	case "G", "end":
 		m.cursor = max(0, len(m.rows)-1)
-		m.settle()
 	case "r":
 		m.goalLabels = map[int64][]goallink.Goal{}
 		m.goalErr = nil
@@ -561,11 +615,20 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "hiding archived tasks and finished projects"
 		}
+		if m.view == viewDeadline {
+			// Finished tasks are never listed here, so what f changes is
+			// whether open tasks in finished projects are.
+			if m.showAll {
+				m.status += "; here that adds open tasks in finished projects"
+			} else {
+				m.status += "; here that drops open tasks in finished projects"
+			}
+		}
 	case "v":
 		from, _ := m.selected()
 		if m.view == viewTree {
 			m.view = viewDeadline
-			m.status = "by deadline: overdue, next 7 days, next 30 days, longer, no deadline"
+			m.status = "by deadline: open tasks under overdue, next 7 days, next 30 days, longer, no deadline"
 		} else {
 			m.view = viewTree
 			m.status = "by project"
@@ -573,6 +636,8 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.err = m.reload()
 		if m.view == viewDeadline {
 			m.landByDeadline(from)
+		} else {
+			m.landByProject(from)
 		}
 	case "left", "right":
 		m.toggleFold()
@@ -583,7 +648,11 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "z":
 		m.archive()
 	case "d":
-		if _, ok := m.selected(); ok {
+		if r, ok := m.selected(); ok {
+			if r.kind == rowHeading {
+				m.status = headingHint
+				return m, nil
+			}
 			m.mode = modeConfirmDelete
 		}
 	case "n":
@@ -600,21 +669,25 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		if r.kind == rowArea {
+		switch r.kind {
+		case rowArea:
 			m.status = "select a project to add a task under; A adds one here"
+			return m, nil
+		case rowHeading:
+			m.status = "select a task to add one under its project"
 			return m, nil
 		}
 		return m, m.openEditor(newTaskForm(nil, r.project.Project.ID, m.projectOptions(), m.now(), 0, 0))
 	case "s":
 		r, ok := m.selected()
-		if !ok || r.kind == rowArea || r.kind == rowProject {
+		if !ok || r.kind == rowArea || r.kind == rowProject || r.kind == rowHeading {
 			m.status = "select a task to add a subtask under"
 			return m, nil
 		}
 		return m, m.openEditor(newSubtaskForm(nil, r.task.Task, 0, 0))
 	case "c":
 		r, ok := m.selected()
-		if !ok || r.kind == rowArea || r.kind == rowProject {
+		if !ok || r.kind == rowArea || r.kind == rowProject || r.kind == rowHeading {
 			m.status = "select a task to copy"
 			return m, nil
 		}
@@ -626,6 +699,8 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		switch r.kind {
+		case rowHeading:
+			m.status = headingHint
 		case rowArea:
 			a := r.area.Area
 			return m, m.openEditor(newAreaForm(&a, a.ParentID, m.areas, inside(r.area), 0, 0))
@@ -643,13 +718,23 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// landByDeadline moves the cursor after switching to by deadline from an
-// area or project row, which has no row there: to the first task listed
-// from inside it, or to the top when it holds none. From a task or
-// subtask the cursor is already on the same row.
+// landByDeadline moves the cursor after switching to by deadline from a
+// row that has no row there: an area, a project, or a finished task or
+// subtask, which the list leaves out. It goes to the soonest due task
+// listed from the same area or project; when none is listed, to the
+// heading that hides the first such task; and to the top when there is
+// no such task at all. From an open task or subtask the cursor is
+// already on the same row.
 func (m *model) landByDeadline(from row) {
 	within := map[int64]bool{}
 	switch from.kind {
+	case rowTask, rowSubtask:
+		if _, ok := m.deadlineContainer(from.target()); ok {
+			// An open task is listed here, or its heading is: reload has
+			// put the cursor on one or the other.
+			return
+		}
+		within[from.project.Project.ID] = true
 	case rowProject:
 		within[from.project.Project.ID] = true
 	case rowArea:
@@ -667,17 +752,108 @@ func (m *model) landByDeadline(from row) {
 		return
 	}
 	for i, r := range m.rows {
-		if r.kind != rowHeading && within[r.project.Project.ID] {
+		if r.kind == rowTask && within[r.project.Project.ID] {
 			m.cursor = i
 			return
 		}
 	}
-	m.cursor = 0
-	m.settle()
+	// Nothing listed: every such task is under a folded heading. Land on
+	// the heading of the soonest due one, as the listed case would.
+	var soonest *task.Task
+	m.eachTask(func(p task.ProjectNode, tk task.TaskNode) bool {
+		if tk.Task.Open() && within[p.Project.ID] && (soonest == nil || sooner(tk.Task, *soonest)) {
+			t := tk.Task
+			soonest = &t
+		}
+		return true
+	})
+	if soonest == nil || !m.selectNear(target{rowTask, soonest.ID}) {
+		m.cursor = 0
+	}
 }
 
+// sooner reports whether a is due before b, with an undated task after
+// any dated one.
+func sooner(a, b task.Task) bool {
+	if a.Due == "" || b.Due == "" {
+		return a.Due != "" && b.Due == ""
+	}
+	return a.Due < b.Due
+}
+
+// landByProject moves the cursor after switching to by project from a
+// heading, which has no row there: to the first task listed that is due
+// about as soon, or to the top when none is.
+func (m *model) landByProject(from row) {
+	if from.kind != rowHeading {
+		return
+	}
+	var first *task.Task
+	m.eachTask(func(_ task.ProjectNode, tk task.TaskNode) bool {
+		if tk.Task.Open() && bucketOf(tk.Task.Due, m.now()) == from.bucket {
+			first = &tk.Task
+			return false
+		}
+		return true
+	})
+	if first == nil || !m.selectNear(target{rowTask, first.ID}) {
+		m.cursor = 0
+	}
+}
+
+// eachTask calls fn for every task in the outline, in by-project order,
+// until fn returns false.
+func (m *model) eachTask(fn func(p task.ProjectNode, tk task.TaskNode) bool) {
+	var walk func(areas []task.AreaNode, projects []task.ProjectNode) bool
+	walk = func(areas []task.AreaNode, projects []task.ProjectNode) bool {
+		for _, a := range areas {
+			if !walk(a.Areas, a.Projects) {
+				return false
+			}
+		}
+		for _, p := range projects {
+			for _, tk := range p.Tasks {
+				if !fn(p, tk) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	walk(m.outline.Areas, m.outline.Projects)
+}
+
+// findTask is the task t names, or the task a subtask t is under.
+func (m *model) findTask(t target) (task.Task, bool) {
+	var found *task.Task
+	m.eachTask(func(_ task.ProjectNode, tk task.TaskNode) bool {
+		if t.kind == rowTask && tk.Task.ID == t.id {
+			found = &tk.Task
+			return false
+		}
+		if t.kind == rowSubtask {
+			for _, s := range tk.Subtasks {
+				if s.ID == t.id {
+					found = &tk.Task
+					return false
+				}
+			}
+		}
+		return true
+	})
+	if found == nil {
+		return task.Task{}, false
+	}
+	return *found, true
+}
+
+// headingHint is what a heading says to keys that act on a task, project
+// or area.
+const headingHint = "headings group tasks by how soon they are due; ←/→ folds one, e and d act on tasks"
+
 // areaHere is the area a new area or project goes in by default: the
-// selected row's area, or the top when nothing is selected.
+// selected row's area, or the top when nothing is selected or the
+// selection is a by-deadline heading, which is in no area.
 func (m *model) areaHere() int64 {
 	if r, ok := m.selected(); ok {
 		return r.areaOf()
@@ -698,16 +874,12 @@ func inside(n task.AreaNode) map[int64]bool {
 }
 
 // toggleFold is the left or right arrow: it hides what is inside the
-// selected area or project, or shows it again when it is hidden. On a
-// task or subtask it folds the project the row is in and moves the cursor
-// there.
+// selected area, project or by-deadline heading, or shows it again when
+// it is hidden. On a task or subtask it folds the project the row is in,
+// or by deadline the heading it is under, and moves the cursor there.
 func (m *model) toggleFold() {
 	r, ok := m.selected()
 	if !ok {
-		return
-	}
-	if m.view == viewDeadline {
-		m.status = "folding is for the by-project view; v goes back to it"
 		return
 	}
 	var (
@@ -716,12 +888,16 @@ func (m *model) toggleFold() {
 		held  string // what folding hides, for the status line
 		empty string // why there is nothing to hide, or "" when there is
 	)
-	switch r.kind {
-	case rowArea:
+	switch {
+	case r.kind == rowArea:
 		t, name, held = r.target(), r.area.Area.Name, "what is in it"
 		if len(r.area.Areas)+len(r.area.Projects) == 0 {
 			empty = "the area is empty"
 		}
+	case r.kind == rowHeading:
+		t, name, held = r.target(), r.bucket.String(), "its tasks"
+	case m.view == viewDeadline:
+		t, name, held = m.headingOf(r), bucketOf(r.task.Task.Due, m.now()).String(), "its tasks"
 	default:
 		t, name, held = target{rowProject, r.project.Project.ID}, r.project.Project.Name, "its tasks"
 		if len(r.project.Tasks) == 0 {
@@ -746,15 +922,20 @@ func (m *model) toggleFold() {
 }
 
 // reveal selects t, first expanding every collapsed area and project
-// around it, so a row folded away can still be shown. By deadline nothing
-// is folded away, so the tree's folds are left as they are.
+// around it, so a row folded away can still be shown. By deadline that
+// is the heading the task is under; the tree's folds are left as they
+// are.
 func (m *model) reveal(t target) {
+	var around []target
 	if m.view == viewDeadline {
-		m.selectTarget(t)
-		return
+		if h, ok := m.deadlineContainer(t); ok {
+			around = []target{h}
+		}
+	} else {
+		around = m.containers(t)
 	}
 	changed := false
-	for _, c := range m.containers(t) {
+	for _, c := range around {
 		if m.collapsed[c] {
 			delete(m.collapsed, c)
 			changed = true
@@ -764,6 +945,20 @@ func (m *model) reveal(t target) {
 		m.rebuildRows()
 	}
 	m.selectTarget(t)
+}
+
+// deadlineContainer is the heading a task or subtask is under by
+// deadline. ok is false for anything else, and for a finished task, which
+// is not listed there.
+func (m *model) deadlineContainer(t target) (target, bool) {
+	if t.kind != rowTask && t.kind != rowSubtask {
+		return target{}, false
+	}
+	found, ok := m.findTask(t)
+	if !ok || !found.Open() {
+		return target{}, false
+	}
+	return target{rowHeading, int64(bucketOf(found.Due, m.now()))}, true
 }
 
 // containers lists what t is inside, outermost first: the areas around
@@ -812,6 +1007,9 @@ func (m *model) advance() {
 	switch r.kind {
 	case rowArea:
 		m.status = "areas have no state; e renames, d deletes"
+		return
+	case rowHeading:
+		m.status = headingHint
 		return
 	case rowSubtask:
 		done := !r.subtask.Done
@@ -919,6 +1117,9 @@ func (m *model) drop() {
 	case rowArea:
 		m.status = "areas have no state; d deletes one and moves what is in it up a level"
 		return
+	case rowHeading:
+		m.status = headingHint
+		return
 	default:
 		m.status = "subtasks are ticked with space, or deleted with d"
 		return
@@ -938,6 +1139,9 @@ func (m *model) archive() {
 	case rowArea, rowProject:
 		m.status = "only tasks are archived; space or x on a project finishes it, which hides it"
 		return
+	case rowHeading:
+		m.status = headingHint
+		return
 	case rowSubtask:
 		m.status = "subtasks go with their task; z on the task archives it"
 		return
@@ -951,7 +1155,11 @@ func (m *model) archive() {
 		}
 		m.status = fmt.Sprintf("task #%d back from the archive", t.ID)
 	case t.Open():
-		m.status = fmt.Sprintf("task #%d is still %s; space finishes it or x drops it, then z archives it", t.ID, t.Status)
+		where := ""
+		if m.view == viewDeadline {
+			where = " in by project" // a finished task leaves this list
+		}
+		m.status = fmt.Sprintf("task #%d is still %s; space finishes it or x drops it, then z%s archives it", t.ID, t.Status, where)
 		return
 	default:
 		if err := m.store.ArchiveTask(m.ctx, t.ID, true); err != nil {
@@ -965,7 +1173,12 @@ func (m *model) archive() {
 
 // finishedHint follows a task being done or dropped: it stays listed
 // until archived.
-func (m *model) finishedHint() string { return "; z archives it" }
+func (m *model) finishedHint() string {
+	if m.view == viewDeadline {
+		return " (gone from this list; by project shows it until archived)"
+	}
+	return "; z archives it"
+}
 
 // hiddenHint explains where something just put out of sight went: what
 // is "archived" for a task or "finished" for a project.
@@ -1078,7 +1291,7 @@ func (m *model) viewList(w, h int) string {
 	if len(m.rows) == 0 {
 		switch {
 		case m.view == viewDeadline:
-			return dimStyle.Render("no tasks\n\nv goes back to by project")
+			return dimStyle.Render("no open tasks\n\nv goes back to by project")
 		case !m.showAll:
 			return dimStyle.Render("no projects yet\n\nA adds one; f shows finished projects")
 		default:
@@ -1119,8 +1332,12 @@ func (m *model) viewRow(r row, selected bool, w int) string {
 	indent := strings.Repeat("  ", r.depth)
 	switch r.kind {
 	case rowHeading:
-		right = fmt.Sprintf("%d", r.count)
-		return headingStyle.Render(fit(r.heading, right, w))
+		left = m.foldMark(r.target()) + r.bucket.String()
+		if r.count == 1 {
+			right = "1 task"
+		} else {
+			right = fmt.Sprintf("%d tasks", r.count)
+		}
 	case rowArea:
 		left = indent + m.foldMark(r.target()) + r.area.Area.Name
 		if n := r.area.OpenTasks(); n > 0 {
@@ -1175,6 +1392,8 @@ func (m *model) viewRow(r row, selected bool, w int) string {
 		return dimStyle.Render(line)
 	case r.kind == rowArea:
 		return areaStyle.Render(line)
+	case r.kind == rowHeading:
+		return headingStyle.Render(line)
 	case r.kind == rowProject:
 		return projectStyle.Render(line)
 	}
@@ -1231,6 +1450,13 @@ func (m *model) viewDetail(w, h int) string {
 	label := func(name, value string) string { return cut(labelStyle.Render(name) + " " + value) }
 	var lines []string
 	switch r.kind {
+	case rowHeading:
+		lines = append(lines, strings.Split(wrap.Bold(true).Render(r.bucket.String()), "\n")...)
+		lines = append(lines, label("due  ", r.bucket.span(m.now())))
+		lines = append(lines, label("tasks", fmt.Sprintf("%d open", r.count)))
+		if m.collapsed[r.target()] {
+			lines = append(lines, "", dimStyle.Render("collapsed; ← shows its tasks"))
+		}
 	case rowArea:
 		a := r.area.Area
 		lines = append(lines, strings.Split(wrap.Bold(true).Render(a.Name), "\n")...)
@@ -1374,7 +1600,7 @@ func (m *model) helpLine() string {
 	}
 	keys := "n area · A project · a task · s subtask · c copy task · e edit · space next status/tick · x drop · z archive · d delete · f show archived"
 	if m.view == viewDeadline {
-		return keys + " · v by project · j/k move · q quit"
+		return keys + " · v by project · ←/→ fold/unfold · j/k move · q quit"
 	}
 	return keys + " · v by deadline · ←/→ fold/unfold · j/k move · q quit"
 }

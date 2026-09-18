@@ -88,13 +88,15 @@ tasktracker task list --due --json
 - **Areas** - Group projects under names that nest as deep as you like.
   An area is a label with a place in the tree, nothing more: no state, no
   dates. Deleting one moves what was in it up a level.
-- **Folding** - `←` or `→` on a project hides its tasks, and on an area
-  hides everything in it, behind a `▸` that keeps the open count; press it
-  again to show them. Folds last until you quit.
+- **Folding** - `←` or `→` on a project hides its tasks, on an area
+  hides everything in it, and by deadline hides a heading's tasks, behind
+  a `▸` that keeps the count; press it again to show them. Folds last
+  until you quit.
 - **By project or by deadline** - The tree groups tasks under their
-  projects. Press `v` for the same tasks as one list under the headings
+  projects. Press `v` for the open tasks as one list under the headings
   Overdue, Next 7 days, Next 30 days, Longer and No deadline, soonest
-  first within each, with finished tasks last; `v` again goes back.
+  first within each. The headings fold with `←`/`→` like areas do, and
+  `v` again goes back.
 - **Archive, don't lose** - A done or dropped task stays in the tree,
   greyed, until you press `z` to archive it. `f` shows the archive, and
   `z` there brings a task back; so does reopening it.
