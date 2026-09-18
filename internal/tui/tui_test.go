@@ -170,6 +170,10 @@ func press(m *model, keys ...string) {
 			msg = tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
 		case "backspace":
 			msg = tea.KeyPressMsg{Code: tea.KeyBackspace}
+		case "left":
+			msg = tea.KeyPressMsg{Code: tea.KeyLeft}
+		case "right":
+			msg = tea.KeyPressMsg{Code: tea.KeyRight}
 		case "shift+tab":
 			msg = tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift}
 		case "ctrl+j":
@@ -740,7 +744,7 @@ func TestAreaRows(t *testing.T) {
 		t.Fatalf("rows = %v\nwant   %v", got, want)
 	}
 	view := plain(m)
-	for _, want := range []string{"▸ arrow", "  ▸ stf", "    house", "      ○ paint the hall", "        [x] buy paint", "  work", "    ○ email accountant", "3 open", "holds   1 areas, 2 projects", "tasks   3 open"} {
+	for _, want := range []string{"▾ arrow", "  ▾ stf", "    ▾ house", "      ○ paint the hall", "        [x] buy paint", "  ▾ work", "    ○ email accountant", "3 open", "holds   1 areas, 2 projects", "tasks   3 open"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q:\n%s", want, view)
 		}
@@ -767,73 +771,162 @@ func TestAreaRows(t *testing.T) {
 	}
 }
 
-func TestZoom(t *testing.T) {
+func TestCollapse(t *testing.T) {
 	m, store := setup(t, nil)
-	arrow, stf := withAreas(t, m, store)
-	press(m, "h")
-	if !strings.Contains(m.status, "everything already") {
-		t.Errorf("h at the top: %q", m.status)
-	}
-	press(m, "l") // into arrow
-	if m.scope != arrow || m.cursor != 0 {
-		t.Fatalf("after l: scope=%d cursor=%d", m.scope, m.cursor)
-	}
-	want := []string{"A:stf", "P:house", "T:paint the hall", "S:buy paint", "S:move furniture", "T:fix the gate", "P:work", "T:email accountant"}
+	ctx := context.Background()
+	press(m, "left") // fold house
+	want := []string{"P:house", "P:work", "T:email accountant"}
 	if got := labels(m); !reflect.DeepEqual(got, want) {
-		t.Errorf("rows inside arrow = %v", got)
+		t.Fatalf("rows after h = %v\nwant %v", got, want)
+	}
+	if m.cursor != 0 || !strings.Contains(m.status, "collapsed house") {
+		t.Errorf("after h: cursor=%d status=%q", m.cursor, m.status)
 	}
 	view := plain(m)
-	if !strings.Contains(view, "tasktracker · tree · arrow") || !strings.Contains(view, "│ ▸ stf") || !strings.Contains(view, "│   house") {
-		t.Errorf("zoomed view:\n%s", view)
+	for _, want := range []string{"▸ house", "2 open", "▾ work", "collapsed; ← shows its tasks"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("collapsed view missing %q:\n%s", want, view)
+		}
 	}
-	press(m, "j", "j", "l") // on paint the hall: into its project's area, stf
-	if m.scope != stf {
-		t.Fatalf("l on a task: scope=%d", m.scope)
+	if strings.Contains(view, "paint the hall") {
+		t.Errorf("collapsed view still lists tasks:\n%s", view)
 	}
-	if got := labels(m); got[0] != "P:house" || len(got) != 5 {
-		t.Errorf("rows inside stf = %v", got)
+	press(m, "left", "left") // the same key unfolds, and folds again
+	if got := labels(m); !reflect.DeepEqual(got, want) {
+		t.Errorf("rows after left twice more = %v", got)
 	}
-	press(m, "l")
-	if !strings.Contains(m.status, "already inside arrow / stf") {
-		t.Errorf("l inside the same area: %q", m.status)
-	}
-	// The due view narrows the same way.
-	press(m, "v")
-	if got := labels(m); !reflect.DeepEqual(got, []string{"T:paint the hall", "T:fix the gate"}) {
-		t.Errorf("due rows inside stf = %v", got)
-	}
-	if !strings.Contains(plain(m), "tasktracker · due · arrow / stf") {
-		t.Error("due title missing the area")
-	}
-	press(m, "v", "h") // back to the tree, out to arrow, cursor on stf
-	if m.scope != arrow {
-		t.Fatalf("after h: scope=%d", m.scope)
-	}
-	if r, _ := m.selected(); r.target() != (target{rowArea, stf}) {
-		t.Errorf("cursor after zooming out: %v", r.target())
-	}
-	press(m, "h")
-	if m.scope != 0 || m.status != "showing everything" {
-		t.Errorf("after second h: scope=%d status=%q", m.scope, m.status)
-	}
-	if r, _ := m.selected(); r.target() != (target{rowArea, arrow}) {
-		t.Errorf("cursor after zooming out to the top: %v", r.target())
-	}
-	press(m, "G", "l") // email accountant is in arrow
-	if m.scope != arrow {
-		t.Errorf("l on a project in arrow: scope=%d", m.scope)
+	press(m, "h", "l") // not bound any more
+	if got := labels(m); !reflect.DeepEqual(got, want) || m.cursor != 0 {
+		t.Errorf("after h and l: rows=%v cursor=%d", got, m.cursor)
 	}
 
-	// The zoomed area vanishing from outside drops back to everything.
-	if err := store.DeleteArea(context.Background(), arrow); err != nil {
+	// The fold survives a reload and an edit elsewhere.
+	press(m, "G", "space") // email accountant -> doing
+	if got := labels(m); !reflect.DeepEqual(got, want) {
+		t.Errorf("rows after an edit = %v", got)
+	}
+	press(m, "right") // on a task: folds work and lands on it
+	if got := labels(m); !reflect.DeepEqual(got, []string{"P:house", "P:work"}) {
+		t.Errorf("rows after h on a task = %v", got)
+	}
+	if r, _ := m.selected(); r.target() != (target{rowProject, 2}) {
+		t.Errorf("cursor after h on a task: %v", r.target())
+	}
+
+	// Adding a task to a collapsed project shows it again.
+	press(m, "a")
+	typeText(m, "send invoice")
+	press(m, "enter", "enter", "enter") // title -> due -> project -> submit
+	if m.mode != modeBrowse || m.err != nil {
+		t.Fatalf("task form: mode=%v err=%v", m.mode, m.err)
+	}
+	if r, _ := m.selected(); r.kind != rowTask || r.task.Task.Title != "send invoice" {
+		t.Errorf("cursor after adding to a collapsed project: %v", r.target())
+	}
+	if got := labels(m); !reflect.DeepEqual(got, []string{"P:house", "P:work", "T:email accountant", "T:send invoice"}) {
+		t.Errorf("rows after adding = %v", got)
+	}
+
+	press(m, "g", "right") // the right arrow unfolds too
+	if got := labels(m); got[1] != "T:paint the hall" || len(got) != 8 {
+		t.Errorf("rows after l = %v", got)
+	}
+	if m.cursor != 0 || m.status != "expanded house" {
+		t.Errorf("after l: cursor=%d status=%q", m.cursor, m.status)
+	}
+	press(m, "j", "left", "right") // on a task: fold the project, then unfold it
+	if got := labels(m); len(got) != 8 || m.cursor != 0 {
+		t.Errorf("after left then right from a task: rows=%v cursor=%d", got, m.cursor)
+	}
+
+	// A project with nothing listed has nothing to fold.
+	p, err := store.AddProject(ctx, task.NewProject{Name: "empty"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	press(m, "r", "G")
+	if r, _ := m.selected(); r.target() != (target{rowProject, p.ID}) {
+		t.Fatalf("cursor: %v", r.target())
+	}
+	press(m, "left")
+	if !strings.Contains(m.status, "nothing to hide") || m.collapsed[target{rowProject, p.ID}] {
+		t.Errorf("left on an empty project: %q", m.status)
+	}
+
+	// The due list is flat.
+	press(m, "v", "left")
+	if !strings.Contains(m.status, "flat") {
+		t.Errorf("h in the due view: %q", m.status)
+	}
+}
+
+func TestFoldArea(t *testing.T) {
+	m, store := setup(t, nil)
+	ctx := context.Background()
+	arrow, stf := withAreas(t, m, store)
+	press(m, "j", "left") // fold stf: house and its tasks go
+	want := []string{"A:arrow", "A:stf", "P:work", "T:email accountant"}
+	if got := labels(m); !reflect.DeepEqual(got, want) {
+		t.Fatalf("rows after folding stf = %v\nwant %v", got, want)
+	}
+	if !strings.Contains(m.status, "collapsed stf") {
+		t.Errorf("status: %q", m.status)
+	}
+	view := plain(m)
+	for _, want := range []string{"▾ arrow", "  ▸ stf", "collapsed; ← shows what is in it", "tasks   2 open"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view missing %q:\n%s", want, view)
+		}
+	}
+	press(m, "k", "right") // fold arrow: everything in it goes, stf's fold kept
+	if got := labels(m); !reflect.DeepEqual(got, []string{"A:arrow"}) {
+		t.Errorf("rows after folding arrow = %v", got)
+	}
+	press(m, "left")
+	if got := labels(m); !reflect.DeepEqual(got, want) {
+		t.Errorf("rows after unfolding arrow = %v", got)
+	}
+
+	// Adding a project inside a folded area shows the area's contents.
+	press(m, "j", "A") // on stf
+	typeText(m, "grant")
+	press(m, "enter", "enter", "enter", "enter") // name, about, area (stf kept), goals -> submit
+	if m.mode != modeBrowse || m.err != nil {
+		t.Fatalf("project form: mode=%v err=%v", m.mode, m.err)
+	}
+	if r, _ := m.selected(); r.kind != rowProject || r.project.Project.Name != "grant" {
+		t.Errorf("cursor after adding into a folded area: %v", r.target())
+	}
+	if m.collapsed[target{rowArea, stf}] {
+		t.Error("stf still collapsed after adding a project into it")
+	}
+	if got := labels(m); !strings.HasPrefix(strings.Join(got, " "), "A:arrow A:stf P:house T:paint the hall") || got[len(got)-3] != "P:grant" {
+		t.Errorf("rows after adding = %v", got)
+	}
+
+	// An empty area has nothing to fold.
+	e, err := store.AddArea(ctx, task.NewArea{Name: "empty"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	press(m, "r")
-	if m.scope != 0 || m.err != nil {
-		t.Errorf("after the area went: scope=%d err=%v", m.scope, m.err)
+	m.selectTarget(target{rowArea, e.ID})
+	press(m, "left")
+	if !strings.Contains(m.status, "area is empty") || m.collapsed[target{rowArea, e.ID}] {
+		t.Errorf("left on an empty area: %q", m.status)
 	}
-	if got := labels(m); got[0] != "A:stf" {
-		t.Errorf("rows after the area went: %v", got)
+
+	// A subtask saved inside a folded project inside a folded area unfolds
+	// both.
+	m.collapsed[target{rowArea, arrow}] = true
+	m.collapsed[target{rowProject, 1}] = true
+	m.rebuildRows()
+	m.reveal(target{rowSubtask, 1})
+	if r, _ := m.selected(); r.target() != (target{rowSubtask, 1}) {
+		t.Errorf("reveal landed on %v", r.target())
+	}
+	if len(m.collapsed) != 0 {
+		t.Errorf("still collapsed: %v", m.collapsed)
 	}
 }
 

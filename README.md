@@ -40,8 +40,8 @@ A project · a task · s subtask · e edit · space next status/tick · x drop �
    and tasks are hidden from the tree until you ask for them.
 5. Once there are enough projects, group them into areas. An area is a
    name that holds projects and other areas, so "arrow" can hold "stf" and
-   "maintenance" with projects inside each. Zoom the tree to any area when
-   the whole thing is too much.
+   "maintenance" with projects inside each. Fold an area or a project
+   when what is in it is in the way.
 
 The design notes behind this, in the owner's own words, are in
 [docs/design/tasks.md](docs/design/tasks.md).
@@ -55,7 +55,8 @@ tasktracker                      # open the terminal UI
 In the UI: `n` add an area, `A` add a project, `a` add a task, `s` add a
 subtask, `e` edit, `space` step a task's status or tick a subtask, `x` drop
 a task or shelve a project, `d` delete, `f` show finished, `v` switch to the
-due list, `l`/`h` zoom into an area and back out, `j`/`k` move, `q` quit.
+due list, `←`/`→` fold or unfold an area or project, `j`/`k` move, `q`
+quit.
 On a project, `space` steps active → done → shelved, but asks `y/N` before
 leaving active, since a done or shelved project is hidden with every task
 in it.
@@ -81,8 +82,10 @@ tasktracker task list --due --json
   tree with open counts and due dates at a glance.
 - **Areas** - Group projects under names that nest as deep as you like.
   An area is a label with a place in the tree, nothing more: no state, no
-  dates. Deleting one moves what was in it up a level. Zoom the tree or
-  the due list to any area with `l`, and back out with `h`.
+  dates. Deleting one moves what was in it up a level.
+- **Folding** - `←` or `→` on a project hides its tasks, and on an area
+  hides everything in it, behind a `▸` that keeps the open count; press it
+  again to show them. Folds last until you quit.
 - **Due list** - Press `v` for every open task with a due date, soonest
   first, overdue ones in red.
 - **Checklists** - Subtasks are a title and a tick. The task's row shows

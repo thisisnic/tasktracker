@@ -41,17 +41,20 @@ stuff with 2 sub-levels, and then within those there would be projects."
 - Goal links stay on projects for now (builder's suggestion, to be
   revisited if STF-style work wants a goal at the area level).
 
-### Zooming
+### Collapsing
 
 "I don't always need to view the full hierarchy btw as it'll truncate
 stuff on the screen, but i do wanna be able to place things so I can choose
 to view by an area at diff level if I want."
 
-So the tree view can be zoomed to any area: the area's name is shown in the
-title and only what is inside it is listed, indented from that area rather
-than from the top. The due view narrows in the same way. Zooming in on a
-project, task or subtask zooms to the area it is in; zooming out goes up
-one area at a time until the whole tree is shown again.
+The first answer was zooming the tree to one area. That was replaced, at
+the owner's request, with folding: the left or right arrow on a project
+hides its tasks, and on an area hides everything in it ("make areas fold
+too"), leaving the row with a `▸` and its open count. The same key shows
+them again ("can we have the same key to expand/close", "why not just the
+arrows"). On a task or subtask it folds the project the row is in. The
+whole tree
+stays in view, so nothing is out of sight; only the detail is.
 
 ## Projects
 
