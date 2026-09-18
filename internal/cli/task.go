@@ -22,6 +22,8 @@ func taskCmd(dbPath *string) *cobra.Command {
 		taskShowCmd(dbPath),
 		taskEditCmd(dbPath),
 		taskMarkCmd(dbPath),
+		taskArchiveCmd(dbPath, true),
+		taskArchiveCmd(dbPath, false),
 		taskDeleteCmd(dbPath),
 	)
 	return cmd
@@ -67,9 +69,11 @@ func taskListCmd(dbPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List tasks",
-		Long: `List open tasks under their projects. --all includes done and dropped tasks
-and finished projects. --due lists only tasks with a due date, soonest first.
---project or --status narrow the list.`,
+		Long: `List tasks under their projects. Finished tasks stay listed until they are
+archived; --all includes archived tasks and finished projects, and --open
+keeps only todo and doing tasks. --due lists open tasks with a due date,
+soonest first; add --all for finished ones too. --project or --status
+narrow the list.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if status != "" {
@@ -90,13 +94,21 @@ and finished projects. --due lists only tasks with a due date, soonest first.
 				if err != nil {
 					return err
 				}
+				if f.Open {
+					outline = outline.WithoutFinished()
+				}
 				if asJSON {
 					return writeJSON(cmd.OutOrStdout(), outline)
 				}
 				printTree(cmd.OutOrStdout(), outline)
 				return nil
 			}
-			f.Open = !all && f.Status == ""
+			f.Unarchived = !all
+			// The due list is for what is coming up, so on its own it
+			// keeps to open tasks; --all or --status widens it.
+			if f.Due && !all && f.Status == "" {
+				f.Open = true
+			}
 			tasks, err := store.ListTasks(cmd.Context(), f)
 			if err != nil {
 				return err
@@ -118,8 +130,10 @@ and finished projects. --due lists only tasks with a due date, soonest first.
 	cmd.Flags().Int64Var(&f.ProjectID, "project", 0, "only tasks in this project")
 	cmd.Flags().StringVar(&status, "status", "", "only tasks with this status: todo, doing, done or dropped")
 	cmd.Flags().BoolVar(&f.Due, "due", false, "only tasks with a due date, soonest first")
-	cmd.Flags().BoolVar(&all, "all", false, "include done and dropped tasks")
+	cmd.Flags().BoolVar(&f.Open, "open", false, "only todo and doing tasks")
+	cmd.Flags().BoolVar(&all, "all", false, "include archived tasks and finished projects")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print as JSON")
+	cmd.MarkFlagsMutuallyExclusive("open", "status")
 	return cmd
 }
 
@@ -132,7 +146,7 @@ func printTasks(cmd *cobra.Command, tasks []task.Task) {
 		if t.Overdue(today) {
 			due += " overdue"
 		}
-		fmt.Fprintf(tw, "%d\t%d\t%s\t%s\t%s\n", t.ID, t.ProjectID, t.Status, due, t.Title)
+		fmt.Fprintf(tw, "%d\t%d\t%s\t%s\t%s\n", t.ID, t.ProjectID, statusWord(t), due, t.Title)
 	}
 	tw.Flush()
 }
@@ -174,7 +188,7 @@ func taskShowCmd(dbPath *string) *cobra.Command {
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "#%d  %s\n", t.ID, t.Title)
 			fmt.Fprintf(out, "project: #%d %s\n", p.ID, p.Name)
-			fmt.Fprintf(out, "status:  %s\n", t.Status)
+			fmt.Fprintf(out, "status:  %s\n", statusWord(t))
 			if t.Due != "" {
 				line := t.Due
 				if days, ok := t.DaysUntilDue(time.Now()); ok && t.Open() {
@@ -197,6 +211,15 @@ func taskShowCmd(dbPath *string) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print as JSON")
 	return cmd
+}
+
+// statusWord is a task's status for a listing, with archived after it
+// when the task has been put away.
+func statusWord(t task.Task) string {
+	if t.Archived {
+		return string(t.Status) + " (archived)"
+	}
+	return string(t.Status)
 }
 
 // dueText says how far off a due date is, in words.
@@ -289,6 +312,40 @@ func taskMarkCmd(dbPath *string) *cobra.Command {
 				return fmt.Errorf("task %d: %w", id, err)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "task %d marked %s\n", id, st)
+			return nil
+		},
+	}
+}
+
+// taskArchiveCmd is archive or unarchive. Archiving hides a finished task
+// from the tree; only a done or dropped task can be archived.
+func taskArchiveCmd(dbPath *string, archive bool) *cobra.Command {
+	use, short := "archive ID", "Put a finished task away, out of the tree"
+	if !archive {
+		use, short = "unarchive ID", "Bring an archived task back into the tree"
+	}
+	return &cobra.Command{
+		Use:   use,
+		Short: short,
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := parseID("task", args[0])
+			if err != nil {
+				return err
+			}
+			store, err := openStore(dbPath)
+			if err != nil {
+				return err
+			}
+			defer store.Close()
+			if err := store.ArchiveTask(cmd.Context(), id, archive); err != nil {
+				return fmt.Errorf("task %d: %w", id, err)
+			}
+			if archive {
+				fmt.Fprintf(cmd.OutOrStdout(), "task %d archived\n", id)
+			} else {
+				fmt.Fprintf(cmd.OutOrStdout(), "task %d unarchived\n", id)
+			}
 			return nil
 		},
 	}

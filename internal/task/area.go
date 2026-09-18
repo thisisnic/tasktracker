@@ -252,7 +252,8 @@ type Outline struct {
 func (o Outline) Find(id int64) (AreaNode, bool) { return findArea(o.Areas, id) }
 
 // Outline loads the tree of areas with their projects, tasks and subtasks.
-// all is as for Tree: false leaves out finished projects and tasks. Every
+// all is as for Tree: false leaves out finished projects and archived
+// tasks. Every
 // area is included, empty or not, since an area is somewhere to put things.
 func (s *Store) Outline(ctx context.Context, all bool) (Outline, error) {
 	areas, err := s.ListAreas(ctx)
@@ -264,6 +265,33 @@ func (s *Store) Outline(ctx context.Context, all bool) (Outline, error) {
 		return Outline{}, err
 	}
 	return Nest(areas, projects), nil
+}
+
+// WithoutFinished is the outline with done and dropped tasks left out.
+// Every area and project stays, so the shape of the tree does not change.
+func (o Outline) WithoutFinished() Outline {
+	var areas func([]AreaNode) []AreaNode
+	projects := func(in []ProjectNode) []ProjectNode {
+		out := make([]ProjectNode, 0, len(in))
+		for _, p := range in {
+			tasks := make([]TaskNode, 0, len(p.Tasks))
+			for _, t := range p.Tasks {
+				if t.Task.Open() {
+					tasks = append(tasks, t)
+				}
+			}
+			out = append(out, ProjectNode{Project: p.Project, Tasks: tasks})
+		}
+		return out
+	}
+	areas = func(in []AreaNode) []AreaNode {
+		out := make([]AreaNode, 0, len(in))
+		for _, a := range in {
+			out = append(out, AreaNode{Area: a.Area, Areas: areas(a.Areas), Projects: projects(a.Projects)})
+		}
+		return out
+	}
+	return Outline{Areas: areas(o.Areas), Projects: projects(o.Projects)}
 }
 
 // Nest arranges areas and projects into an Outline. A project whose area

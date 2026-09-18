@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 	title      TEXT NOT NULL,
 	status     TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo','doing','done','dropped')),
 	due        TEXT NOT NULL DEFAULT '',
+	archived   INTEGER NOT NULL DEFAULT 0,
 	created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS tasks_project ON tasks(project_id, id);
@@ -134,6 +135,18 @@ func migrate(db *sql.DB) error {
 	}
 	if !has {
 		if _, err := db.Exec(`ALTER TABLE projects ADD COLUMN area_id INTEGER REFERENCES areas(id) ON DELETE SET NULL`); err != nil {
+			return err
+		}
+	}
+	has, err = hasColumn(db, "tasks", "archived")
+	if err != nil {
+		return err
+	}
+	if !has {
+		// Finished tasks in an old database were hidden; now they show,
+		// greyed, until archived. Nothing is archived here: putting a task
+		// away is the user's call.
+		if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`); err != nil {
 			return err
 		}
 	}
@@ -540,12 +553,12 @@ func (s *Store) AddTask(ctx context.Context, in NewTask) (Task, error) {
 	return s.GetTask(ctx, id)
 }
 
-const selectTask = `SELECT id, project_id, title, status, due, created_at FROM tasks`
+const selectTask = `SELECT id, project_id, title, status, due, archived, created_at FROM tasks`
 
 func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 	var t Task
 	var created string
-	if err := row.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Status, &t.Due, &created); err != nil {
+	if err := row.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Status, &t.Due, &t.Archived, &created); err != nil {
 		return Task{}, err
 	}
 	t.CreatedAt = parseTime(created)
@@ -567,6 +580,8 @@ type TaskFilter struct {
 	Status    Status
 	// Open keeps only todo and doing tasks.
 	Open bool
+	// Unarchived leaves out archived tasks.
+	Unarchived bool
 	// Due keeps only tasks with a due date, ordered soonest first.
 	Due bool
 }
@@ -587,6 +602,9 @@ func (s *Store) ListTasks(ctx context.Context, f TaskFilter) ([]Task, error) {
 	}
 	if f.Open {
 		where = append(where, "status IN ('todo','doing')")
+	}
+	if f.Unarchived {
+		where = append(where, "archived = 0")
 	}
 	if f.Due {
 		where = append(where, "due <> ''")
@@ -623,7 +641,8 @@ type TaskEdit struct {
 	ProjectID *int64 // move the task to another project
 }
 
-// UpdateTask applies a TaskEdit.
+// UpdateTask applies a TaskEdit. A task left open by the edit is no longer
+// archived.
 func (s *Store) UpdateTask(ctx context.Context, id int64, e TaskEdit) (Task, error) {
 	t, err := s.GetTask(ctx, id)
 	if err != nil {
@@ -654,18 +673,23 @@ func (s *Store) UpdateTask(ctx context.Context, id int64, e TaskEdit) (Task, err
 		}
 		t.ProjectID = *e.ProjectID
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET title = ?, due = ?, status = ?, project_id = ? WHERE id = ?`, t.Title, t.Due, string(t.Status), t.ProjectID, id); err != nil {
+	if t.Open() {
+		t.Archived = false
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET title = ?, due = ?, status = ?, project_id = ?, archived = ? WHERE id = ?`, t.Title, t.Due, string(t.Status), t.ProjectID, t.Archived, id); err != nil {
 		return Task{}, err
 	}
 	return s.GetTask(ctx, id)
 }
 
-// MarkTask sets a task's status.
+// MarkTask sets a task's status. Marking a task todo or doing also brings
+// it out of the archive, since only finished tasks are archived.
 func (s *Store) MarkTask(ctx context.Context, id int64, st Status) error {
 	if err := checkStatus(st); err != nil {
 		return err
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status = ? WHERE id = ?`, string(st), id)
+	reopened := st == Todo || st == Doing
+	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status = ?, archived = CASE WHEN ? THEN 0 ELSE archived END WHERE id = ?`, string(st), reopened, id)
 	if err != nil {
 		return err
 	}
@@ -673,6 +697,26 @@ func (s *Store) MarkTask(ctx context.Context, id int64, st Status) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// ArchiveTask puts a finished task away, or brings it back. Only a done or
+// dropped task can be archived: an open task is still work to do, and
+// hiding it would lose it.
+func (s *Store) ArchiveTask(ctx context.Context, id int64, archived bool) error {
+	// The status check is part of the update, so a task reopened between
+	// a check and a write can never end up open and archived.
+	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET archived = ? WHERE id = ? AND (? = 0 OR status IN ('done','dropped'))`, archived, id, archived)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n > 0 {
+		return nil
+	}
+	t, err := s.GetTask(ctx, id)
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf("task is still %s; mark it done or dropped first", t.Status)
 }
 
 // DeleteTask removes a task and its subtasks.
@@ -796,19 +840,20 @@ func (s *Store) DeleteSubtask(ctx context.Context, id int64) error {
 // Tree loads every project with its tasks and subtasks, in a fixed number
 // of queries however much data there is. Projects, tasks and subtasks are
 // each in id order. With all false, done and shelved projects are left out,
-// and so are done and dropped tasks and their subtasks.
+// and so are archived tasks and their subtasks. Finished tasks that are
+// not archived stay in.
 func (s *Store) Tree(ctx context.Context, all bool) ([]ProjectNode, error) {
 	projects, err := s.ListProjects(ctx, ProjectFilter{All: all})
 	if err != nil {
 		return nil, err
 	}
-	tasks, err := s.ListTasks(ctx, TaskFilter{Open: !all})
+	tasks, err := s.ListTasks(ctx, TaskFilter{Unarchived: !all})
 	if err != nil {
 		return nil, err
 	}
 	q := selectSubtask
 	if !all {
-		q += " WHERE task_id IN (SELECT id FROM tasks WHERE status IN ('todo','doing'))"
+		q += " WHERE task_id IN (SELECT id FROM tasks WHERE archived = 0)"
 	}
 	rows, err := s.db.QueryContext(ctx, q+" ORDER BY task_id, id")
 	if err != nil {

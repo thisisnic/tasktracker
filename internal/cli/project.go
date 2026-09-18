@@ -214,7 +214,7 @@ func projectShowCmd(dbPath, cfgPath *string) *cobra.Command {
 				fmt.Fprintln(out, "tasks:")
 				tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 				for _, t := range tasks {
-					fmt.Fprintf(tw, "  %d\t%s\t%s\t%s\n", t.ID, t.Status, t.Due, t.Title)
+					fmt.Fprintf(tw, "  %d\t%s\t%s\t%s\n", t.ID, statusWord(t), t.Due, t.Title)
 				}
 				tw.Flush()
 			}
@@ -374,7 +374,7 @@ func printTree(w io.Writer, o task.Outline) {
 		for _, p := range projects {
 			fmt.Fprintf(tw, "P%d\t%s\t\t%s%s\n", p.Project.ID, p.Project.State, indent, p.Project.Name)
 			for _, t := range p.Tasks {
-				fmt.Fprintf(tw, "%d\t%s\t%s\t%s  %s\n", t.Task.ID, t.Task.Status, t.Task.Due, indent, t.Task.Title)
+				fmt.Fprintf(tw, "%d\t%s\t%s\t%s  %s\n", t.Task.ID, statusWord(t.Task), t.Task.Due, indent, t.Task.Title)
 				for _, s := range t.Subtasks {
 					box := "[ ]"
 					if s.Done {

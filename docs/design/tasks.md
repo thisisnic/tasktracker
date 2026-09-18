@@ -70,6 +70,23 @@ something inside a fold unfolds the way to it.
 - No priority, estimate, notes or comments. Those are the issue-tracker
   parts left out until they are missed.
 
+### Archiving
+
+Finishing a task used to hide it. That lost the record of what had been
+done, and a slip of the space bar made a task vanish. Now a done or
+dropped task stays in the tree, greyed out, and leaves only when it is
+archived on purpose.
+
+- Archiving is a flag on the task, separate from its status. Only a
+  finished task can be archived: an open one is still work to do, and
+  hiding it would lose it.
+- An archived task is out of the tree and the due list by default, and
+  shown again with the same toggle that shows finished projects.
+- Reopening an archived task, by marking it todo or doing, brings it back
+  out of the archive. There is no such thing as an archived open task.
+- Projects keep their own rule: a done or shelved project is hidden with
+  everything in it, after a confirmation.
+
 ## Subtasks
 
 - A subtask is a checklist item: a title and a tick. It has no status or
@@ -101,8 +118,9 @@ Layout, to be adjusted as it gets used:
   selected item.
 - A due view that lists open tasks with a due date, soonest first, overdue
   ones marked.
-- Finished things (done or dropped tasks, done or shelved projects) are
-  hidden by default and shown with a toggle, so the tree stays short.
+- Finished tasks stay in the tree, greyed, until archived. Archived tasks
+  and finished projects (done or shelved) are hidden by default and shown
+  with a toggle, so the tree stays short.
 
 ## Open questions
 

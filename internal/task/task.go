@@ -6,7 +6,8 @@
 // description, an end state and zero or more links to goals in goaltracker.
 // A task has a title, a status and an optional due date. A subtask is a
 // checklist item: a title and a tick. Ticking every subtask does not finish
-// the task; the owner marks it done themselves.
+// the task; the owner marks it done themselves. A finished task stays in
+// the tree until it is archived, which is the one way to hide it.
 package task
 
 import (
@@ -55,11 +56,15 @@ func (p Project) Open() bool { return p.State == Active }
 
 // Task is one piece of work inside a project.
 type Task struct {
-	ID        int64     `json:"id"`
-	ProjectID int64     `json:"project_id"`
-	Title     string    `json:"title"`
-	Status    Status    `json:"status"`
-	Due       string    `json:"due,omitempty"` // YYYY-MM-DD, or empty for none
+	ID        int64  `json:"id"`
+	ProjectID int64  `json:"project_id"`
+	Title     string `json:"title"`
+	Status    Status `json:"status"`
+	Due       string `json:"due,omitempty"` // YYYY-MM-DD, or empty for none
+	// Archived is set on a finished task that has been put away. An open
+	// task is never archived: marking an archived task todo or doing
+	// brings it back.
+	Archived  bool      `json:"archived,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 

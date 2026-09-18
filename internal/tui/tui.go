@@ -26,7 +26,7 @@ type Options struct {
 	// Goals looks up the statements of goals a project links to. Nil means
 	// goal ids are shown bare.
 	Goals *goallink.Reader
-	// ShowFinished starts with done and dropped tasks and finished projects
+	// ShowFinished starts with archived tasks and finished projects
 	// visible.
 	ShowFinished bool
 }
@@ -114,7 +114,7 @@ type model struct {
 	cursor  int
 	width   int
 	height  int
-	showAll bool     // show finished tasks and projects
+	showAll bool     // show archived tasks and finished projects
 	view    viewKind // tree or due
 	// collapsed holds the areas and projects whose contents are hidden in
 	// the tree. It is kept across reloads, so a fold survives edits.
@@ -438,9 +438,9 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.showAll = !m.showAll
 		m.err = m.reload()
 		if m.showAll {
-			m.status = "showing finished tasks and projects"
+			m.status = "showing archived tasks and finished projects"
 		} else {
-			m.status = "hiding finished tasks and projects"
+			m.status = "hiding archived tasks and finished projects"
 		}
 	case "v":
 		if m.view == viewTree {
@@ -457,6 +457,8 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.advance()
 	case "x":
 		m.drop()
+	case "z":
+		m.archive()
 	case "d":
 		if _, ok := m.selected(); ok {
 			m.mode = modeConfirmDelete
@@ -656,8 +658,13 @@ func (m *model) advance() {
 			return
 		}
 		m.status = fmt.Sprintf("task #%d %s", r.task.Task.ID, next)
-		if next == task.Finished {
-			m.status += m.hiddenHint()
+		switch {
+		case r.task.Task.Archived:
+			// An archived task shown with f: stepping it back to todo
+			// reopens it, which takes it out of the archive.
+			m.status += " (back from the archive)"
+		case next == task.Finished:
+			m.status += m.finishedHint()
 		}
 	case rowProject:
 		next := nextState(r.project.Project.State)
@@ -680,7 +687,7 @@ func (m *model) setProjectState(id int64, next task.State) {
 	}
 	m.status = fmt.Sprintf("project #%d %s", id, next)
 	if next != task.Active {
-		m.status += m.hiddenHint()
+		m.status += m.hiddenHint("finished")
 	}
 	m.err = m.reload()
 }
@@ -695,9 +702,10 @@ func nextState(s task.State) task.State {
 	return task.Active
 }
 
-// drop is x: a task is dropped, a project shelved. Both are hidden unless
-// finished things are shown. Pressing it again on a dropped task or a
-// shelved project brings it back.
+// drop is x: a task is dropped, a project shelved. A dropped task stays
+// in the tree, greyed, until it is archived; a shelved project is hidden
+// unless finished things are shown. Pressing it again on a dropped task
+// or a shelved project brings it back.
 func (m *model) drop() {
 	r, ok := m.selected()
 	if !ok {
@@ -714,6 +722,17 @@ func (m *model) drop() {
 			return
 		}
 		m.status = fmt.Sprintf("task #%d %s", r.task.Task.ID, st)
+		switch {
+		case r.task.Task.Archived && st == task.Dropped:
+			// An archived done task shown with f: it stays archived.
+			m.status += " (still archived)"
+		case r.task.Task.Archived:
+			// An archived dropped task shown with f: reopening it takes
+			// it out of the archive.
+			m.status += " (back from the archive)"
+		case st == task.Dropped:
+			m.status += m.finishedHint()
+		}
 	case rowProject:
 		st := task.Shelved
 		if r.project.Project.State == task.Shelved {
@@ -723,7 +742,7 @@ func (m *model) drop() {
 			m.err = err
 			return
 		}
-		m.status = fmt.Sprintf("project #%d %s", r.project.Project.ID, st)
+		m.status = fmt.Sprintf("project #%d %s", r.project.Project.ID, st) + m.hiddenHint("finished")
 	case rowArea:
 		m.status = "areas have no state; d deletes one and moves what is in it up a level"
 		return
@@ -731,18 +750,65 @@ func (m *model) drop() {
 		m.status = "subtasks are ticked with space, or deleted with d"
 		return
 	}
-	m.status += m.hiddenHint()
 	m.err = m.reload()
 }
 
-// hiddenHint explains where a finished item went. The due view only ever
-// lists open tasks, so there f would not bring it back.
-func (m *model) hiddenHint() string {
+// archive is z: a finished task is put away, out of the tree, and an
+// archived task is brought back. An open task cannot be archived, since
+// it is still work to do.
+func (m *model) archive() {
+	r, ok := m.selected()
+	if !ok {
+		return
+	}
+	switch r.kind {
+	case rowArea, rowProject:
+		m.status = "only tasks are archived; space or x on a project finishes it, which hides it"
+		return
+	case rowSubtask:
+		m.status = "subtasks go with their task; z on the task archives it"
+		return
+	}
+	t := r.task.Task
+	switch {
+	case t.Archived:
+		if err := m.store.ArchiveTask(m.ctx, t.ID, false); err != nil {
+			m.err = err
+			return
+		}
+		m.status = fmt.Sprintf("task #%d back from the archive", t.ID)
+	case t.Open():
+		m.status = fmt.Sprintf("task #%d is still %s; space finishes it or x drops it, then z archives it", t.ID, t.Status)
+		return
+	default:
+		if err := m.store.ArchiveTask(m.ctx, t.ID, true); err != nil {
+			m.err = err
+			return
+		}
+		m.status = fmt.Sprintf("task #%d archived", t.ID) + m.hiddenHint("archived")
+	}
+	m.err = m.reload()
+}
+
+// finishedHint follows a task being done or dropped: it stays in the tree
+// until archived, but the due view only lists open tasks, so there it is
+// gone.
+func (m *model) finishedHint() string {
+	if m.view == viewDue {
+		return " (gone from the due list)"
+	}
+	return "; z archives it"
+}
+
+// hiddenHint explains where something just put out of sight went: what
+// is "archived" for a task or "finished" for a project. The due view only
+// ever lists open tasks, so there f would not bring it back.
+func (m *model) hiddenHint(what string) string {
 	switch {
 	case m.view == viewDue:
 		return " (gone from the due list)"
 	case !m.showAll:
-		return " (hidden; f shows finished)"
+		return " (hidden; f shows " + what + ")"
 	}
 	return ""
 }
@@ -818,7 +884,7 @@ func (m *model) View() tea.View {
 	}
 	head := titleStyle.Render(title)
 	if m.showAll {
-		head += dimStyle.Render(" · showing finished")
+		head += dimStyle.Render(" · showing archived")
 	}
 	b.WriteString(ansi.Truncate(head, max(10, m.width), "…"))
 	b.WriteString("\n")
@@ -915,10 +981,17 @@ func (m *model) viewRow(r row, selected bool, w int) string {
 			suffix = "  " + r.project.Project.Name
 		}
 		left = fmt.Sprintf("%s%s %s", indent, statusGlyph(t.Status), t.Title)
+		var parts []string
 		if n := len(r.task.Subtasks); n > 0 {
-			right = fmt.Sprintf("%d/%d  ", r.task.Ticked(), n)
+			parts = append(parts, fmt.Sprintf("%d/%d", r.task.Ticked(), n))
 		}
-		right += t.Due
+		if t.Archived {
+			parts = append(parts, "archived")
+		}
+		if t.Due != "" {
+			parts = append(parts, t.Due)
+		}
+		right = strings.Join(parts, "  ")
 		finished = !t.Open()
 	case rowSubtask:
 		box := "[ ]"
@@ -1031,7 +1104,11 @@ func (m *model) viewDetail(w, h int) string {
 		t := r.task.Task
 		lines = append(lines, strings.Split(wrap.Bold(true).Render(t.Title), "\n")...)
 		lines = append(lines, label("project", r.project.Project.Name))
-		lines = append(lines, label("status ", statusText(t.Status)+"   "+labelStyle.Render("id")+fmt.Sprintf(" #%d", t.ID)))
+		status := statusText(t.Status)
+		if t.Archived {
+			status += " · archived"
+		}
+		lines = append(lines, label("status ", status+"   "+labelStyle.Render("id")+fmt.Sprintf(" #%d", t.ID)))
 		if t.Due != "" {
 			due := t.Due
 			if days, ok := t.DaysUntilDue(m.now()); ok && t.Open() {
@@ -1128,5 +1205,5 @@ func (m *model) helpLine() string {
 	if m.mode == modeForm && m.form != nil {
 		return m.form.help()
 	}
-	return "n area · A project · a task · s subtask · e edit · space next status/tick · x drop · d delete · f finished · v due · ←/→ fold/unfold · j/k move · q quit"
+	return "n area · A project · a task · s subtask · e edit · space next status/tick · x drop · z archive · d delete · f show archived · v due · ←/→ fold/unfold · j/k move · q quit"
 }

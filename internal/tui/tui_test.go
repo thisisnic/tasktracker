@@ -278,13 +278,18 @@ func TestSpaceAdvances(t *testing.T) {
 	if tk, _ := store.GetTask(ctx, 1); tk.Status != task.Finished {
 		t.Errorf("space on doing: %s", tk.Status)
 	}
-	// Done tasks are hidden; the status line says so and the cursor stays put.
-	if got := labels(m); got[1] != "T:fix the gate" || !strings.Contains(m.status, "hidden") {
+	// A done task stays in the tree until it is archived; the status line
+	// says how.
+	if got := labels(m); got[1] != "T:paint the hall" || !strings.Contains(m.status, "z archives it") {
 		t.Errorf("after done: rows=%v status=%q", got, m.status)
+	}
+	press(m, "z")
+	if got := labels(m); got[1] != "T:fix the gate" || !strings.Contains(m.status, "hidden; f shows archived") {
+		t.Errorf("after archiving: rows=%v status=%q", got, m.status)
 	}
 	press(m, "f")
 	if got := labels(m); got[1] != "T:paint the hall" || !m.showAll {
-		t.Errorf("f did not show finished: %v", got)
+		t.Errorf("f did not show the archived task: %v", got)
 	}
 	press(m, "g", "j", "j", "space") // subtask row: toggles the tick
 	if r, _ := m.selected(); r.kind != rowSubtask || r.subtask.Done {
@@ -331,8 +336,9 @@ func TestDropAndShelve(t *testing.T) {
 	if tk, _ := store.GetTask(ctx, 1); tk.Status != task.Dropped {
 		t.Errorf("x on task: %s", tk.Status)
 	}
-	if got := labels(m); got[1] != "T:fix the gate" {
-		t.Errorf("dropped task still listed: %v", got)
+	// A dropped task stays listed, greyed, until it is archived.
+	if got := labels(m); got[1] != "T:paint the hall" || !strings.Contains(plain(m), "✗ paint the hall") || !strings.Contains(m.status, "z archives it") {
+		t.Errorf("dropped task: rows=%v status=%q", got, m.status)
 	}
 	press(m, "f", "g", "j", "x") // x on a dropped task brings it back
 	if tk, _ := store.GetTask(ctx, 1); tk.Status != task.Todo {
@@ -349,6 +355,70 @@ func TestDropAndShelve(t *testing.T) {
 	press(m, "f")
 	if got := labels(m); got[0] != "P:work" {
 		t.Errorf("shelved project still listed: %v", got)
+	}
+}
+
+func TestArchive(t *testing.T) {
+	m, store := setup(t, nil)
+	ctx := context.Background()
+	press(m, "z") // on a project
+	if !strings.Contains(m.status, "only tasks are archived") {
+		t.Errorf("z on project: %q", m.status)
+	}
+	press(m, "j", "z") // on an open task
+	if tk, _ := store.GetTask(ctx, 1); tk.Archived || !strings.Contains(m.status, "still todo") {
+		t.Errorf("z on open task: archived=%v status=%q", tk.Archived, m.status)
+	}
+	press(m, "j", "z") // on a subtask
+	if !strings.Contains(m.status, "z on the task") {
+		t.Errorf("z on subtask: %q", m.status)
+	}
+	press(m, "k", "space", "space", "z") // todo -> doing -> done, then archive
+	if tk, _ := store.GetTask(ctx, 1); !tk.Archived {
+		t.Fatal("z did not archive the done task")
+	}
+	if got := labels(m); !reflect.DeepEqual(got, []string{"P:house", "T:fix the gate", "P:work", "T:email accountant"}) {
+		t.Errorf("rows after archiving: %v", got)
+	}
+	if r, _ := m.selected(); r.target() != (target{rowTask, 2}) {
+		t.Errorf("cursor after archiving: %v", r.target())
+	}
+	// f shows it again, marked as archived in the row and the detail.
+	press(m, "f", "g", "j")
+	if r, _ := m.selected(); r.target() != (target{rowTask, 1}) {
+		t.Fatalf("archived task not shown: %v", labels(m))
+	}
+	view := plain(m)
+	for _, want := range []string{"1/2  archived  2026-09-10", "status  done · archived", "showing archived"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view missing %q:\n%s", want, view)
+		}
+	}
+	press(m, "z") // brings it back
+	if tk, _ := store.GetTask(ctx, 1); tk.Archived || !strings.Contains(m.status, "back from the archive") {
+		t.Errorf("z on archived task: archived=%v status=%q", tk.Archived, m.status)
+	}
+	press(m, "f")
+	if got, view := labels(m), plain(m); got[1] != "T:paint the hall" || strings.Contains(view, "1/2  archived") || strings.Contains(view, "· archived") {
+		t.Errorf("unarchived task hidden or still marked: %v\n%s", got, view)
+	}
+	// Reopening an archived task brings it back too, and the status line
+	// says so; dropping an archived done task leaves it archived.
+	press(m, "z", "f", "g", "j", "x") // archive, show, select, done -> dropped
+	if tk, _ := store.GetTask(ctx, 1); !tk.Archived || tk.Status != task.Dropped || !strings.Contains(m.status, "still archived") {
+		t.Errorf("x on an archived done task: %+v status=%q", tk, m.status)
+	}
+	press(m, "x") // dropped -> todo
+	if tk, _ := store.GetTask(ctx, 1); tk.Archived || tk.Status != task.Todo || !strings.Contains(m.status, "back from the archive") {
+		t.Errorf("x on an archived dropped task: %+v status=%q", tk, m.status)
+	}
+	press(m, "space", "space", "z", "g", "j", "space") // done, archive (still shown), done -> todo
+	if tk, _ := store.GetTask(ctx, 1); tk.Archived || tk.Status != task.Todo || !strings.Contains(m.status, "back from the archive") {
+		t.Errorf("space on an archived task: %+v status=%q", tk, m.status)
+	}
+	press(m, "f")
+	if got := labels(m); got[1] != "T:paint the hall" {
+		t.Errorf("reopened task hidden: %v", got)
 	}
 }
 
@@ -861,17 +931,20 @@ func TestCollapse(t *testing.T) {
 	press(m, "v")
 
 	// A fold whose contents have since gone can still be undone: fold work
-	// while its finished task shows, hide finished, then unfold.
+	// while its archived task shows, hide archived, then unfold.
 	if err := store.MarkTask(ctx, 3, task.Finished); err != nil {
 		t.Fatal(err)
 	}
-	press(m, "f") // showing finished; work still lists email accountant
+	if err := store.ArchiveTask(ctx, 3, true); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "f") // showing archived; work still lists email accountant
 	m.selectTarget(target{rowProject, 2})
 	press(m, "left")
 	if !m.collapsed[target{rowProject, 2}] {
 		t.Fatal("work did not fold")
 	}
-	press(m, "f") // hiding finished; work now lists nothing
+	press(m, "f") // hiding archived; work now lists nothing
 	m.selectTarget(target{rowProject, 2})
 	press(m, "left")
 	if m.collapsed[target{rowProject, 2}] || m.status != "expanded work" {

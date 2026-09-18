@@ -2,11 +2,13 @@ package task
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -198,6 +200,7 @@ func TestListTasksFilters(t *testing.T) {
 	t3 := addTask(t, s, NewTask{ProjectID: p.ID, Title: "whenever"})
 	t4 := addTask(t, s, NewTask{ProjectID: p.ID, Title: "finished", Due: "2026-09-01"})
 	check(t, s.MarkTask(ctx, t4.ID, Finished))
+	check(t, s.ArchiveTask(ctx, t4.ID, true))
 
 	ids := func(ts []Task) []int64 {
 		var out []int64
@@ -214,6 +217,8 @@ func TestListTasksFilters(t *testing.T) {
 		{TaskFilter{ProjectID: q.ID}, []int64{t2.ID}},
 		{TaskFilter{Status: Finished}, []int64{t4.ID}},
 		{TaskFilter{Open: true}, []int64{t1.ID, t3.ID, t2.ID}},
+		{TaskFilter{Unarchived: true}, []int64{t1.ID, t3.ID, t2.ID}},
+		{TaskFilter{Status: Finished, Unarchived: true}, nil},
 		{TaskFilter{Due: true}, []int64{t4.ID, t2.ID, t1.ID}},
 		{TaskFilter{Due: true, Open: true}, []int64{t2.ID, t1.ID}},
 	}
@@ -222,6 +227,97 @@ func TestListTasksFilters(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(ids(got), c.want) {
 			t.Errorf("ListTasks(%+v) = %v, %v; want %v", c.f, ids(got), err, c.want)
 		}
+	}
+}
+
+func TestArchive(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	p := addProject(t, s, NewProject{Name: "house"})
+	tk := addTask(t, s, NewTask{ProjectID: p.ID, Title: "paint"})
+
+	// An open task cannot be put away.
+	if err := s.ArchiveTask(ctx, tk.ID, true); err == nil || !strings.Contains(err.Error(), "still todo") {
+		t.Errorf("archiving an open task: %v", err)
+	}
+	if err := s.ArchiveTask(ctx, 99, true); !errors.Is(err, ErrNotFound) {
+		t.Errorf("archiving a missing task: %v", err)
+	}
+	check(t, s.MarkTask(ctx, tk.ID, Finished))
+	check(t, s.ArchiveTask(ctx, tk.ID, true))
+	if got, _ := s.GetTask(ctx, tk.ID); !got.Archived || got.Status != Finished {
+		t.Errorf("archived task = %+v", got)
+	}
+	tree, err := s.Tree(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree[0].Tasks) != 0 {
+		t.Errorf("archived task still in the tree: %+v", tree[0].Tasks)
+	}
+	if all, _ := s.Tree(ctx, true); len(all[0].Tasks) != 1 {
+		t.Errorf("archived task missing from the full tree: %+v", all)
+	}
+
+	// Reopening brings a task back, whichever way it is reopened.
+	check(t, s.MarkTask(ctx, tk.ID, Todo))
+	if got, _ := s.GetTask(ctx, tk.ID); got.Archived {
+		t.Error("marking todo left the task archived")
+	}
+	check(t, s.MarkTask(ctx, tk.ID, Dropped))
+	check(t, s.ArchiveTask(ctx, tk.ID, true))
+	check(t, s.MarkTask(ctx, tk.ID, Finished)) // finished to finished: stays archived
+	if got, _ := s.GetTask(ctx, tk.ID); !got.Archived {
+		t.Error("marking done unarchived the task")
+	}
+	doing := Doing
+	if got, err := s.UpdateTask(ctx, tk.ID, TaskEdit{Status: &doing}); err != nil || got.Archived {
+		t.Errorf("editing to doing: %+v, %v", got, err)
+	}
+	title := "paint again"
+	check(t, s.MarkTask(ctx, tk.ID, Finished))
+	check(t, s.ArchiveTask(ctx, tk.ID, true))
+	if got, err := s.UpdateTask(ctx, tk.ID, TaskEdit{Title: &title}); err != nil || !got.Archived {
+		t.Errorf("renaming an archived task: %+v, %v", got, err)
+	}
+	check(t, s.ArchiveTask(ctx, tk.ID, false))
+	if got, _ := s.GetTask(ctx, tk.ID); got.Archived {
+		t.Error("unarchive did not take")
+	}
+}
+
+// TestMigrateAddsArchived opens a database made before tasks could be
+// archived and checks the column is added with nothing archived.
+func TestMigrateAddsArchived(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := strings.Replace(schema, "\tarchived   INTEGER NOT NULL DEFAULT 0,\n", "", 1)
+	if old == schema {
+		t.Fatal("schema no longer has the archived line this test removes")
+	}
+	if _, err := db.Exec(old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO projects (id, name, created_at) VALUES (1, 'p', '');
+		INSERT INTO tasks (id, project_id, title, status, created_at) VALUES (1, 1, 'done one', 'done', ''), (2, 1, 'open one', 'todo', '')`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	tree, err := s.Tree(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree) != 1 || len(tree[0].Tasks) != 2 || tree[0].Tasks[0].Task.Archived {
+		t.Errorf("tree after migration = %+v", tree)
 	}
 }
 
@@ -297,10 +393,14 @@ func TestTree(t *testing.T) {
 	t1 := addTask(t, s, NewTask{ProjectID: p.ID, Title: "one"})
 	t2 := addTask(t, s, NewTask{ProjectID: p.ID, Title: "two"})
 	check(t, s.MarkTask(ctx, t2.ID, Dropped))
-	addTask(t, s, NewTask{ProjectID: q.ID, Title: "three"})
+	t3 := addTask(t, s, NewTask{ProjectID: p.ID, Title: "put away"})
+	check(t, s.MarkTask(ctx, t3.ID, Finished))
+	check(t, s.ArchiveTask(ctx, t3.ID, true))
+	addTask(t, s, NewTask{ProjectID: q.ID, Title: "four"})
 	addSubtask(t, s, t1.ID, "x")
 	addSubtask(t, s, t1.ID, "y")
 	addSubtask(t, s, t2.ID, "under the dropped task")
+	addSubtask(t, s, t3.ID, "under the archived task")
 
 	tree, err := s.Tree(ctx, false)
 	if err != nil {
@@ -312,7 +412,8 @@ func TestTree(t *testing.T) {
 	if !reflect.DeepEqual(tree[0].Project.GoalIDs, []int64{1}) {
 		t.Errorf("goal ids missing from tree: %+v", tree[0].Project)
 	}
-	if len(tree[0].Tasks) != 1 || tree[0].Tasks[0].Task.ID != t1.ID || len(tree[0].Tasks[0].Subtasks) != 2 {
+	// The dropped task stays, greyed by the UI; the archived one goes.
+	if len(tree[0].Tasks) != 2 || tree[0].Tasks[0].Task.ID != t1.ID || len(tree[0].Tasks[0].Subtasks) != 2 || tree[0].Tasks[1].Task.ID != t2.ID || len(tree[0].Tasks[1].Subtasks) != 1 {
 		t.Errorf("open tree tasks = %+v", tree[0].Tasks)
 	}
 	if len(tree[1].Tasks) != 0 {
@@ -323,11 +424,11 @@ func TestTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(all) != 3 || len(all[0].Tasks) != 2 || len(all[1].Tasks) != 1 {
+	if len(all) != 3 || len(all[0].Tasks) != 3 || len(all[1].Tasks) != 1 {
 		t.Errorf("full tree = %+v", all)
 	}
-	if len(all[0].Tasks[1].Subtasks) != 1 {
-		t.Errorf("subtask under the dropped task missing from the full tree: %+v", all[0].Tasks[1])
+	if len(all[0].Tasks[2].Subtasks) != 1 {
+		t.Errorf("subtask under the archived task missing from the full tree: %+v", all[0].Tasks[2])
 	}
 }
 

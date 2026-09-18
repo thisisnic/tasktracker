@@ -229,15 +229,44 @@ func TestTaskLifecycle(t *testing.T) {
 	if msg := r.run("", true, "task", "mark", "2", "blocked"); !strings.Contains(msg, "want todo, doing, done or dropped") {
 		t.Errorf("bad status: %q", msg)
 	}
+	// A done task stays listed until it is archived.
 	out = r.run("", false, "task", "list")
-	if strings.Contains(out, "email accountant") || !strings.Contains(out, "doing") {
-		t.Errorf("list hides doing or shows done:\n%s", out)
+	if !strings.Contains(out, "email accountant") || !strings.Contains(out, "doing") || !strings.Contains(out, "done") {
+		t.Errorf("list hides the doing or done task:\n%s", out)
 	}
-	if out := r.run("", false, "task", "list", "--all"); !strings.Contains(out, "email accountant") {
-		t.Errorf("--all misses the done task:\n%s", out)
+	if out := r.run("", false, "task", "list", "--open"); strings.Contains(out, "email accountant") || !strings.Contains(out, "hallway") || !strings.Contains(out, "P2") {
+		t.Errorf("--open keeps the tree without the done task:\n%s", out)
 	}
-	if out := r.run("", false, "task", "list", "--status", "done"); !strings.Contains(out, "email accountant") || strings.Contains(out, "hallway") {
-		t.Errorf("--status done:\n%s", out)
+	if msg := r.run("", true, "task", "list", "--open", "--status", "done"); !strings.Contains(msg, "open") || !strings.Contains(msg, "status") {
+		t.Errorf("--open with --status: %q", msg)
+	}
+	if msg := r.run("", true, "task", "archive", "1"); !strings.Contains(msg, "task 1: task is still doing") {
+		t.Errorf("archiving an open task: %q", msg)
+	}
+	if out := r.run("", false, "task", "archive", "2"); !strings.Contains(out, "task 2 archived") {
+		t.Errorf("archive: %q", out)
+	}
+	out = r.run("", false, "task", "list")
+	if strings.Contains(out, "email accountant") {
+		t.Errorf("list shows the archived task:\n%s", out)
+	}
+	if out := r.run("", false, "task", "list", "--all"); !strings.Contains(out, "done (archived)") {
+		t.Errorf("--all misses the archived task:\n%s", out)
+	}
+	if out := r.run("", false, "task", "list", "--status", "done"); strings.Contains(out, "email accountant") {
+		t.Errorf("--status done lists the archived task:\n%s", out)
+	}
+	if out := r.run("", false, "task", "list", "--status", "done", "--all"); !strings.Contains(out, "email accountant") || strings.Contains(out, "hallway") {
+		t.Errorf("--status done --all:\n%s", out)
+	}
+	if out := r.run("", false, "task", "show", "2"); !strings.Contains(out, "status:  done (archived)") {
+		t.Errorf("show of an archived task:\n%s", out)
+	}
+	if out := r.run("", false, "task", "unarchive", "2"); !strings.Contains(out, "task 2 unarchived") {
+		t.Errorf("unarchive: %q", out)
+	}
+	if err := json.Unmarshal([]byte(r.run("", false, "task", "show", "2", "--json")), &node); err != nil || node.Task.Archived {
+		t.Errorf("after unarchive: %+v, %v", node, err)
 	}
 	if out := r.run("", false, "task", "list", "--project", "1"); !strings.Contains(out, "no tasks match") {
 		t.Errorf("--project 1 after the move:\n%s", out)
@@ -260,10 +289,18 @@ func TestDueListing(t *testing.T) {
 	r.run("", false, "task", "add", "later", "--project", "1", "--due", "2099-12-01")
 	r.run("", false, "task", "add", "long ago", "--project", "1", "--due", "2000-01-01")
 	r.run("", false, "task", "add", "whenever", "--project", "1")
+	r.run("", false, "task", "add", "finished", "--project", "1", "--due", "2001-01-01")
+	r.run("", false, "task", "mark", "4", "done")
 	out := r.run("", false, "task", "list", "--due")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(lines) != 3 || !strings.Contains(lines[1], "long ago") || !strings.Contains(lines[1], "overdue") || !strings.Contains(lines[2], "later") || strings.Contains(lines[2], "overdue") {
 		t.Errorf("--due listing:\n%s", out)
+	}
+	if out := r.run("", false, "task", "list", "--due", "--all"); !strings.Contains(out, "finished") {
+		t.Errorf("--due --all misses the done task:\n%s", out)
+	}
+	if out := r.run("", false, "task", "list", "--due", "--status", "done"); !strings.Contains(out, "finished") || strings.Contains(out, "long ago") {
+		t.Errorf("--due --status done:\n%s", out)
 	}
 	if out := r.run("", false, "task", "show", "2"); !strings.Contains(out, "days overdue") {
 		t.Errorf("show of an overdue task:\n%s", out)

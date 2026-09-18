@@ -24,7 +24,7 @@ tasktracker · tree
 │   ○ email accountant                                ││   [x] buy paint                           │
 │                                                     ││   [ ] move furniture                      │
 ╰─────────────────────────────────────────────────────╯╰───────────────────────────────────────────╯
-A project · a task · s subtask · e edit · space next status/tick · x drop · d delete · f finished · v due · j/k move · q quit
+n area · A project · a task · s subtask · e edit · space next status/tick · x drop · z archive · d delete · f show archived · v due · ←/→ fold/unfold · j/k move · q quit
 ```
 
 ## How It Works
@@ -36,9 +36,13 @@ A project · a task · s subtask · e edit · space next status/tick · x drop �
 3. Break a task into subtasks when it helps: a checklist of titles with a
    tick each. Ticking every item does not finish the task; you mark that
    yourself.
-4. Mark a project `done` or `shelved` when it is over. Finished projects
-   and tasks are hidden from the tree until you ask for them.
-5. Once there are enough projects, group them into areas. An area is a
+4. A task you finish or drop stays in the tree, greyed out, so you can see
+   what is done. Archive it when you no longer want it in view; the
+   archive is one key away when you do.
+5. Mark a project `done` or `shelved` when it is over. Finished projects
+   are hidden from the tree, with everything in them, until you ask for
+   them.
+6. Once there are enough projects, group them into areas. An area is a
    name that holds projects and other areas, so "home" can hold "garden" and
    "maintenance" with projects inside each. Fold an area or a project
    when what is in it is in the way.
@@ -54,8 +58,9 @@ tasktracker                      # open the terminal UI
 
 In the UI: `n` add an area, `A` add a project, `a` add a task, `s` add a
 subtask, `e` edit, `space` step a task's status or tick a subtask, `x` drop
-a task or shelve a project, `d` delete, `f` show finished, `v` switch to the
-due list, `←`/`→` fold or unfold an area or project, `j`/`k` move, `q`
+a task or shelve a project, `z` archive a finished task or bring it back,
+`d` delete, `f` show archived tasks and finished projects, `v` switch to
+the due list, `←`/`→` fold or unfold an area or project, `j`/`k` move, `q`
 quit.
 On a project, `space` steps active → done → shelved, but asks `y/N` before
 leaving active, since a done or shelved project is hidden with every task
@@ -88,6 +93,9 @@ tasktracker task list --due --json
   again to show them. Folds last until you quit.
 - **Due list** - Press `v` for every open task with a due date, soonest
   first, overdue ones in red.
+- **Archive, don't lose** - A done or dropped task stays in the tree,
+  greyed, until you press `z` to archive it. `f` shows the archive, and
+  `z` there brings a task back; so does reopening it.
 - **Checklists** - Subtasks are a title and a tick. The task's row shows
   how many are done.
 - **Goal links** - A project stores the ids of the goaltracker goals it
@@ -191,10 +199,11 @@ tasktracker update            # install it
 | `tasktracker project mark ID active\|done\|shelved` | Set a project's state |
 | `tasktracker project delete ID` | Delete a project with all its tasks; `--yes` |
 | `tasktracker task add TITLE --project ID` | Add a task; `--due`, `--json` |
-| `tasktracker task list` | Show the tree of areas, projects and open tasks; `--all`, `--project`, `--status`, `--due`, `--json` |
+| `tasktracker task list` | Show the tree of areas, projects and tasks; `--open`, `--all`, `--project`, `--status`, `--due`, `--json` |
 | `tasktracker task show ID` | One task with its subtasks; `--json` |
 | `tasktracker task edit ID` | Change title, due date or project; `--no-due` |
 | `tasktracker task mark ID todo\|doing\|done\|dropped` | Set a task's status |
+| `tasktracker task archive ID` / `unarchive ID` | Put a finished task out of the tree, or bring it back |
 | `tasktracker task delete ID` | Delete a task and its subtasks; `--yes` |
 | `tasktracker subtask add TASK_ID TITLE` | Add a checklist item; `--json` |
 | `tasktracker subtask tick ID` / `untick ID` | Tick or untick an item |

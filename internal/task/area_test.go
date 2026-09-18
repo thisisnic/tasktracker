@@ -108,9 +108,10 @@ func TestOutlineAndDeleteArea(t *testing.T) {
 	garden := addArea(t, s, NewArea{Name: "garden", ParentID: home.ID})
 	maint := addArea(t, s, NewArea{Name: "maintenance", ParentID: home.ID})
 	report := addProject(t, s, NewProject{Name: "grant report", AreaID: garden.ID})
-	addTask(t, s, NewTask{ProjectID: report.ID, Title: "draft"})
+	draft := addTask(t, s, NewTask{ProjectID: report.ID, Title: "draft"})
 	done := addTask(t, s, NewTask{ProjectID: report.ID, Title: "outline"})
 	check(t, s.MarkTask(ctx, done.ID, Finished))
+	check(t, s.ArchiveTask(ctx, done.ID, true))
 	triage := addProject(t, s, NewProject{Name: "issue triage", AreaID: maint.ID})
 	addTask(t, s, NewTask{ProjectID: triage.ID, Title: "weekly pass"})
 	house := addProject(t, s, NewProject{Name: "house"})
@@ -135,6 +136,22 @@ func TestOutlineAndDeleteArea(t *testing.T) {
 	node, ok := o.Find(garden.ID)
 	if !ok || len(node.Projects) != 1 || node.Projects[0].Project.ID != report.ID || len(node.Projects[0].Tasks) != 1 {
 		t.Errorf("Find(garden) = %+v, %v", node, ok)
+	}
+	// Leaving finished tasks out keeps every area and project.
+	dropped := addTask(t, s, NewTask{ProjectID: report.ID, Title: "dropped"})
+	check(t, s.MarkTask(ctx, dropped.ID, Dropped))
+	o, err = s.Outline(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := o.WithoutFinished()
+	before, _ := o.Find(garden.ID)
+	after, ok := open.Find(garden.ID)
+	if !ok || len(before.Projects[0].Tasks) != 2 || len(after.Projects[0].Tasks) != 1 || after.Projects[0].Tasks[0].Task.ID != draft.ID {
+		t.Errorf("WithoutFinished: before %+v, after %+v", before, after)
+	}
+	if as, ps := open.Areas[0].Counts(); as != 2 || ps != 2 || len(open.Projects) != 1 {
+		t.Errorf("WithoutFinished changed the shape: %+v", open)
 	}
 	if _, ok := o.Find(99); ok {
 		t.Error("Find(99) found something")
