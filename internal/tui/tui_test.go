@@ -777,10 +777,10 @@ func TestCollapse(t *testing.T) {
 	press(m, "left") // fold house
 	want := []string{"P:house", "P:work", "T:email accountant"}
 	if got := labels(m); !reflect.DeepEqual(got, want) {
-		t.Fatalf("rows after h = %v\nwant %v", got, want)
+		t.Fatalf("rows after left = %v\nwant %v", got, want)
 	}
 	if m.cursor != 0 || !strings.Contains(m.status, "collapsed house") {
-		t.Errorf("after h: cursor=%d status=%q", m.cursor, m.status)
+		t.Errorf("after left: cursor=%d status=%q", m.cursor, m.status)
 	}
 	view := plain(m)
 	for _, want := range []string{"▸ house", "2 open", "▾ work", "collapsed; ← shows its tasks"} {
@@ -807,7 +807,7 @@ func TestCollapse(t *testing.T) {
 	}
 	press(m, "right") // on a task: folds work and lands on it
 	if got := labels(m); !reflect.DeepEqual(got, []string{"P:house", "P:work"}) {
-		t.Errorf("rows after h on a task = %v", got)
+		t.Errorf("rows after right on a task = %v", got)
 	}
 	if r, _ := m.selected(); r.target() != (target{rowProject, 2}) {
 		t.Errorf("cursor after h on a task: %v", r.target())
@@ -827,12 +827,12 @@ func TestCollapse(t *testing.T) {
 		t.Errorf("rows after adding = %v", got)
 	}
 
-	press(m, "g", "right") // the right home unfolds too
+	press(m, "g", "right") // the right arrow unfolds too
 	if got := labels(m); got[1] != "T:paint the hall" || len(got) != 8 {
-		t.Errorf("rows after l = %v", got)
+		t.Errorf("rows after right = %v", got)
 	}
 	if m.cursor != 0 || m.status != "expanded house" {
-		t.Errorf("after l: cursor=%d status=%q", m.cursor, m.status)
+		t.Errorf("after right: cursor=%d status=%q", m.cursor, m.status)
 	}
 	press(m, "j", "left", "right") // on a task: fold the project, then unfold it
 	if got := labels(m); len(got) != 8 || m.cursor != 0 {
@@ -856,7 +856,61 @@ func TestCollapse(t *testing.T) {
 	// The due list is flat.
 	press(m, "v", "left")
 	if !strings.Contains(m.status, "flat") {
-		t.Errorf("h in the due view: %q", m.status)
+		t.Errorf("left in the due view: %q", m.status)
+	}
+	press(m, "v")
+
+	// A fold whose contents have since gone can still be undone: fold work
+	// while its finished task shows, hide finished, then unfold.
+	if err := store.MarkTask(ctx, 3, task.Finished); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "f") // showing finished; work still lists email accountant
+	m.selectTarget(target{rowProject, 2})
+	press(m, "left")
+	if !m.collapsed[target{rowProject, 2}] {
+		t.Fatal("work did not fold")
+	}
+	press(m, "f") // hiding finished; work now lists nothing
+	m.selectTarget(target{rowProject, 2})
+	press(m, "left")
+	if m.collapsed[target{rowProject, 2}] || m.status != "expanded work" {
+		t.Errorf("unfolding an emptied project: %q", m.status)
+	}
+	if !strings.Contains(plain(m), "▾ work") {
+		t.Errorf("view after unfolding:\n%s", plain(m))
+	}
+
+	// A deleted project's fold is forgotten, so a project that reuses its
+	// id does not start folded.
+	m.selectTarget(target{rowProject, p.ID})
+	if _, err := store.AddTask(ctx, task.NewTask{ProjectID: p.ID, Title: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "r", "left")
+	if !m.collapsed[target{rowProject, p.ID}] {
+		t.Fatal("empty did not fold")
+	}
+	press(m, "d", "y")
+	if m.err != nil {
+		t.Fatal(m.err)
+	}
+	again, err := store.AddProject(ctx, task.NewProject{Name: "again"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddTask(ctx, task.NewTask{ProjectID: again.ID, Title: "two"}); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "r")
+	if again.ID != p.ID {
+		t.Logf("id not reused (%d vs %d); the prune is checked directly", again.ID, p.ID)
+	}
+	if m.collapsed[target{rowProject, p.ID}] {
+		t.Error("a deleted project's fold survived reload")
+	}
+	if got := labels(m); got[len(got)-1] != "T:two" {
+		t.Errorf("rows after re-adding = %v", got)
 	}
 }
 

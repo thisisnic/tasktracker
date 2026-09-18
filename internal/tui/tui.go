@@ -151,6 +151,7 @@ func (m *model) reload() error {
 		return err
 	}
 	m.outline, m.areas = outline, areas
+	m.pruneFolds()
 	m.rebuildRows()
 	if keep != nil {
 		m.selectTarget(*keep)
@@ -159,6 +160,31 @@ func (m *model) reload() error {
 		m.cursor = max(0, len(m.rows)-1)
 	}
 	return nil
+}
+
+// pruneFolds forgets folds on areas and projects no longer in the outline,
+// so a deleted row's fold cannot land on whatever next reuses its id.
+func (m *model) pruneFolds() {
+	if len(m.collapsed) == 0 {
+		return
+	}
+	present := map[target]bool{}
+	var walk func(areas []task.AreaNode, projects []task.ProjectNode)
+	walk = func(areas []task.AreaNode, projects []task.ProjectNode) {
+		for _, a := range areas {
+			present[target{rowArea, a.Area.ID}] = true
+			walk(a.Areas, a.Projects)
+		}
+		for _, p := range projects {
+			present[target{rowProject, p.Project.ID}] = true
+		}
+	}
+	walk(m.outline.Areas, m.outline.Projects)
+	for t := range m.collapsed {
+		if !present[t] {
+			delete(m.collapsed, t)
+		}
+	}
 }
 
 // rebuildRows flattens the tree for the current view. The tree view lists
@@ -510,28 +536,33 @@ func (m *model) toggleFold() {
 		return
 	}
 	var (
-		t    target
-		name string
-		held string // what folding hides, for the status line
+		t     target
+		name  string
+		held  string // what folding hides, for the status line
+		empty string // why there is nothing to hide, or "" when there is
 	)
 	switch r.kind {
 	case rowArea:
 		t, name, held = r.target(), r.area.Area.Name, "what is in it"
 		if len(r.area.Areas)+len(r.area.Projects) == 0 {
-			m.status = "nothing to hide: the area is empty"
-			return
+			empty = "the area is empty"
 		}
 	default:
 		t, name, held = target{rowProject, r.project.Project.ID}, r.project.Project.Name, "its tasks"
 		if len(r.project.Tasks) == 0 {
-			m.status = "nothing to hide: the project has no tasks listed"
-			return
+			empty = "the project has no tasks listed"
 		}
 	}
-	if m.collapsed[t] && r.target() == t {
+	switch {
+	case m.collapsed[t] && r.target() == t:
+		// Unfold before asking whether there is anything to hide, so a fold
+		// whose contents have since gone can still be undone.
 		delete(m.collapsed, t)
 		m.status = "expanded " + name
-	} else {
+	case empty != "":
+		m.status = "nothing to hide: " + empty
+		return
+	default:
 		m.collapsed[t] = true
 		m.status = "collapsed " + name + "; ← shows " + held + " again"
 	}
