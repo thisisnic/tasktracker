@@ -151,7 +151,9 @@ func (m *model) reload() error {
 		return err
 	}
 	m.outline, m.areas = outline, areas
-	m.pruneFolds()
+	if err := m.pruneFolds(); err != nil {
+		return err
+	}
 	m.rebuildRows()
 	if keep != nil {
 		m.selectTarget(*keep)
@@ -162,29 +164,32 @@ func (m *model) reload() error {
 	return nil
 }
 
-// pruneFolds forgets folds on areas and projects no longer in the outline,
-// so a deleted row's fold cannot land on whatever next reuses its id.
-func (m *model) pruneFolds() {
+// pruneFolds forgets folds on areas and projects that have been deleted,
+// so a deleted row's fold cannot land on whatever next reuses its id. It
+// checks every project, not just the ones in the outline: a finished
+// project hidden by f still exists, and keeps its fold for when it shows
+// again.
+func (m *model) pruneFolds() error {
 	if len(m.collapsed) == 0 {
-		return
+		return nil
+	}
+	projects, err := m.store.ListProjects(m.ctx, task.ProjectFilter{All: true})
+	if err != nil {
+		return err
 	}
 	present := map[target]bool{}
-	var walk func(areas []task.AreaNode, projects []task.ProjectNode)
-	walk = func(areas []task.AreaNode, projects []task.ProjectNode) {
-		for _, a := range areas {
-			present[target{rowArea, a.Area.ID}] = true
-			walk(a.Areas, a.Projects)
-		}
-		for _, p := range projects {
-			present[target{rowProject, p.Project.ID}] = true
-		}
+	for _, a := range m.areas {
+		present[target{rowArea, a.ID}] = true
 	}
-	walk(m.outline.Areas, m.outline.Projects)
+	for _, p := range projects {
+		present[target{rowProject, p.ID}] = true
+	}
 	for t := range m.collapsed {
 		if !present[t] {
 			delete(m.collapsed, t)
 		}
 	}
+	return nil
 }
 
 // rebuildRows flattens the tree for the current view. The tree view lists

@@ -810,7 +810,7 @@ func TestCollapse(t *testing.T) {
 		t.Errorf("rows after right on a task = %v", got)
 	}
 	if r, _ := m.selected(); r.target() != (target{rowProject, 2}) {
-		t.Errorf("cursor after h on a task: %v", r.target())
+		t.Errorf("cursor after right on a task: %v", r.target())
 	}
 
 	// Adding a task to a collapsed project shows it again.
@@ -911,6 +911,26 @@ func TestCollapse(t *testing.T) {
 	}
 	if got := labels(m); got[len(got)-1] != "T:two" {
 		t.Errorf("rows after re-adding = %v", got)
+	}
+
+	// A finished project hidden by f is not deleted, so its fold is kept
+	// for when it shows again.
+	if err := store.MarkProject(ctx, again.ID, task.Done); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "f") // showing finished
+	m.selectTarget(target{rowProject, again.ID})
+	press(m, "left")
+	if !m.collapsed[target{rowProject, again.ID}] {
+		t.Fatal("again did not fold")
+	}
+	press(m, "f", "f") // hidden, then shown again
+	if !m.collapsed[target{rowProject, again.ID}] {
+		t.Error("a hidden project's fold was forgotten")
+	}
+	m.selectTarget(target{rowProject, again.ID})
+	if !strings.Contains(plain(m), "▸ again") {
+		t.Errorf("view after showing finished again:\n%s", plain(m))
 	}
 }
 
