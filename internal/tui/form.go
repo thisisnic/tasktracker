@@ -274,6 +274,8 @@ type taskForm struct {
 	copySubs int   // how many subtasks come with the copy, for the title
 	title    string
 	due      string
+	issue    string
+	oldIssue string // the issue as stored, when editing
 	status   task.Status
 	project  int64
 	today    time.Time
@@ -296,6 +298,8 @@ func newTaskForm(existing *task.Task, projectID int64, projects []task.Project, 
 		f.editID = existing.ID
 		f.title = existing.Title
 		f.due = existing.Due
+		f.issue = existing.Issue
+		f.oldIssue = existing.Issue
 		f.status = existing.Status
 		f.project = existing.ProjectID
 	}
@@ -309,7 +313,8 @@ func newTaskForm(existing *task.Task, projectID int64, projects []task.Project, 
 
 // newCopyForm is the task form filled in from an existing task, for a new
 // task that is much like it. The title, due date and project start as the
-// original's and can be changed; the copy is todo and takes the
+// original's and can be changed; the issue starts blank, since the
+// original's issue is the original's work. The copy is todo and takes the
 // original's subtasks unticked.
 func newCopyForm(from task.Task, subtasks int, projects []task.Project, today time.Time, width, height int) *taskForm {
 	f := &taskForm{copyFrom: from.ID, copySubs: subtasks, title: from.Title, due: from.Due, project: from.ProjectID, status: task.Todo, today: today}
@@ -340,6 +345,14 @@ func (f *taskForm) build(title string, withStatus bool, projects []task.Project,
 		huh.NewInput().Title("Task").Value(&f.title).Validate(required("task")),
 		huh.NewInput().Title("Due").Description("YYYY-MM-DD, today, tomorrow, or blank").Value(&f.due).
 			Validate(func(s string) error { _, err := task.ParseDue(s, f.today); return err }),
+		huh.NewInput().Title("Issue").Description("GitHub issue URL or owner/repo#N, or blank").Value(&f.issue).
+			Validate(func(s string) error {
+				if f.issueKept(s) {
+					return nil
+				}
+				_, err := task.ParseIssue(s)
+				return err
+			}),
 	}
 	if withStatus {
 		fields = append(fields, huh.NewSelect[task.Status]().Title("Status").Options(
@@ -361,7 +374,7 @@ func (f *taskForm) apply(m *model) (target, error) {
 	}
 	switch {
 	case f.copyFrom != 0:
-		n, err := m.store.CopyTask(m.ctx, f.copyFrom, task.TaskEdit{Title: &f.title, Due: &due, ProjectID: &f.project})
+		n, err := m.store.CopyTask(m.ctx, f.copyFrom, task.TaskEdit{Title: &f.title, Due: &due, Issue: &f.issue, ProjectID: &f.project})
 		if err == nil {
 			// The status line reports what was copied, not what the row
 			// showed when c was pressed.
@@ -369,11 +382,25 @@ func (f *taskForm) apply(m *model) (target, error) {
 		}
 		return target{rowTask, n.Task.ID}, err
 	case f.editID == 0:
-		t, err := m.store.AddTask(m.ctx, task.NewTask{ProjectID: f.project, Title: f.title, Due: due})
+		t, err := m.store.AddTask(m.ctx, task.NewTask{ProjectID: f.project, Title: f.title, Due: due, Issue: f.issue})
 		return target{rowTask, t.ID}, err
 	}
-	t, err := m.store.UpdateTask(m.ctx, f.editID, task.TaskEdit{Title: &f.title, Due: &due, Status: &f.status, ProjectID: &f.project})
+	e := task.TaskEdit{Title: &f.title, Due: &due, Status: &f.status, ProjectID: &f.project}
+	if !f.issueKept(f.issue) {
+		e.Issue = &f.issue
+	}
+	t, err := m.store.UpdateTask(m.ctx, f.editID, e)
 	return target{rowTask, t.ID}, err
+}
+
+// issueKept reports whether the issue field still holds the stored issue
+// of the task being edited. A kept issue is neither checked nor saved, so
+// a stored link that ParseIssue would refuse, as from a hand-edited
+// database, does not block changes to the other fields. The input drops
+// control characters from what it is given, so they are left out of the
+// comparison.
+func (f *taskForm) issueKept(s string) bool {
+	return f.editID != 0 && task.WithoutControls(s) == task.WithoutControls(f.oldIssue)
 }
 
 func (f *taskForm) saved(t target) string {

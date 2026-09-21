@@ -34,6 +34,76 @@ func TestParseDue(t *testing.T) {
 	}
 }
 
+func TestParseIssue(t *testing.T) {
+	cases := []struct {
+		in, want string
+		wantErr  bool
+	}{
+		{"", "", false},
+		{" None ", "", false},
+		{"https://github.com/owner/repo/issues/42", "https://github.com/owner/repo/issues/42", false},
+		{"http://www.github.com/owner/repo/issues/42/", "https://github.com/owner/repo/issues/42", false},
+		{"github.com/owner/my.repo/pull/7#issuecomment-1", "https://github.com/owner/my.repo/pull/7", false},
+		{"https://github.com/owner/repo/issues/42?q=1", "https://github.com/owner/repo/issues/42", false},
+		{" owner/repo#42 ", "https://github.com/owner/repo/issues/42", false},
+		{"owner/repo#0", "", true},
+		{"https://github.com/owner/repo/issues/0", "", true},
+		{"https://github.com/owner/repo/issues/99999999999999999999", "", true},
+		{"https://github.com/owner/repo", "", true},
+		{"https://github.com/owner/repo/issues", "", true},
+		{"https://gitlab.com/owner/repo/issues/42", "", true},
+		{"ftp://github.com/owner/repo/issues/42", "", true},
+		{"owner/..#1", "", true},
+		{"https://github.com/owner/./issues/1", "", true},
+		{"https://github.com/owner/../issues/1", "", true},
+		{"#42", "", true},
+		{"fix the gate", "", true},
+	}
+	for _, c := range cases {
+		got, err := ParseIssue(c.in)
+		if (err != nil) != c.wantErr || got != c.want {
+			t.Errorf("ParseIssue(%q) = %q, %v; want %q, err=%v", c.in, got, err, c.want, c.wantErr)
+		}
+	}
+	if _, err := ParseIssue(" #42 "); err == nil || err.Error() != `issue " #42 ": want a GitHub issue URL, owner/repo#N or none` {
+		t.Errorf("error should quote the input as typed: %v", err)
+	}
+}
+
+func TestIssueRef(t *testing.T) {
+	cases := []struct {
+		in, ref, link string
+		ok            bool
+	}{
+		{"", "", "", false},
+		{"https://github.com/owner/repo/issues/42", "owner/repo#42", "https://github.com/owner/repo/issues/42", true},
+		{"https://github.com/owner/repo/pull/7", "owner/repo#7", "https://github.com/owner/repo/pull/7", true},
+		// Not written by ParseIssue, as from a hand-edited database.
+		{"owner/repo#3", "owner/repo#3", "https://github.com/owner/repo/issues/3", true},
+		{"somewhere else", "", "", false},
+		{"https://github.com/owner/repo/issues/1\x1b]8;;evil\x07", "", "", false},
+	}
+	for _, c := range cases {
+		ref, link, ok := Task{Issue: c.in}.IssueRef()
+		if ref != c.ref || link != c.link || ok != c.ok {
+			t.Errorf("IssueRef(%q) = %q, %q, %v; want %q, %q, %v", c.in, ref, link, ok, c.ref, c.link, c.ok)
+		}
+	}
+}
+
+func TestIssueText(t *testing.T) {
+	cases := map[string]string{
+		"":                              "",
+		"owner/repo#3":                  "https://github.com/owner/repo/issues/3",
+		"the fence ticket\x1b[2J\u009b": "the fence ticket[2J",
+	}
+	for in, want := range cases {
+		if got := (Task{Issue: in}).IssueText(); got != want {
+			t.Errorf("IssueText(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestDueArithmetic(t *testing.T) {
 	loc := time.FixedZone("ahead", 10*3600)
 	today := time.Date(2026, 9, 17, 23, 30, 0, 0, loc)

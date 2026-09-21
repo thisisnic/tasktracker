@@ -1512,6 +1512,17 @@ func (m *model) viewDetail(w, h int) string {
 			}
 			lines = append(lines, label("due    ", due))
 		}
+		if t.Issue != "" {
+			// A recognised link is shown short, as an OSC 8 hyperlink that
+			// a terminal which knows them opens on a click. Anything else,
+			// as from a hand-edited database, is shown as IssueText makes
+			// it safe to print.
+			issue := t.IssueText()
+			if ref, link, ok := t.IssueRef(); ok {
+				issue = lipgloss.NewStyle().Hyperlink(link).Render(ref)
+			}
+			lines = append(lines, label("issue  ", issue))
+		}
 		if len(r.task.Subtasks) > 0 {
 			lines = append(lines, "", labelStyle.Render(fmt.Sprintf("subtasks %d/%d", r.task.Ticked(), len(r.task.Subtasks))))
 			for _, s := range r.task.Subtasks {

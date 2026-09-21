@@ -4,18 +4,23 @@
 // The hierarchy is project > task > subtask, with areas above projects for
 // grouping: an area holds projects and other areas. A project has a name, a
 // description, an end state and zero or more links to goals in goaltracker.
-// A task has a title, a status and an optional due date. A subtask is a
-// checklist item: a title and a tick. Ticking every subtask does not finish
-// the task; the owner marks it done themselves. A finished task stays in
-// the tree until it is archived, which is the one way to hide it.
+// A task has a title, a status, an optional due date and an optional link
+// to a GitHub issue. A subtask is a checklist item: a title and a tick.
+// Ticking every subtask does not finish the task; the owner marks it done
+// themselves. A finished task stays in the tree until it is archived,
+// which is the one way to hide it.
 package task
 
 import (
 	"errors"
 	"fmt"
+	"net/url"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // State is where a project is in its life.
@@ -60,7 +65,8 @@ type Task struct {
 	ProjectID int64  `json:"project_id"`
 	Title     string `json:"title"`
 	Status    Status `json:"status"`
-	Due       string `json:"due,omitempty"` // YYYY-MM-DD, or empty for none
+	Due       string `json:"due,omitempty"`   // YYYY-MM-DD, or empty for none
+	Issue     string `json:"issue,omitempty"` // a GitHub issue or pull request URL, or empty for none
 	// Archived is set on a finished task that has been put away. An open
 	// task is never archived: marking an archived task todo or doing
 	// brings it back.
@@ -130,6 +136,88 @@ func ParseDue(raw string, today time.Time) (string, error) {
 		return "", fmt.Errorf("due %q: want YYYY-MM-DD, today, tomorrow or none", raw)
 	}
 	return d.Format(dueLayout), nil
+}
+
+// issuePath is the path of a GitHub issue or pull request page, and
+// issueShort is the owner/repo#N shorthand for one.
+var (
+	issuePath  = regexp.MustCompile(`^/([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)/(issues|pull)/([0-9]+)/?$`)
+	issueShort = regexp.MustCompile(`^([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)#([0-9]+)$`)
+)
+
+// ParseIssue normalises a link to a GitHub issue. Empty or "none" means no
+// link. Accepted forms: an issue or pull request URL, with or without
+// https://, and the shorthand owner/repo#N. Anything after the number, such
+// as a comment anchor, is dropped. The result is always a full https URL,
+// so every stored link can be opened as it is; the shorthand becomes an
+// issues URL, which GitHub redirects to the pull request when N is one.
+func ParseIssue(raw string) (string, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" || strings.EqualFold(s, "none") {
+		return "", nil
+	}
+	bad := fmt.Errorf("issue %q: want a GitHub issue URL, owner/repo#N or none", raw)
+	if m := issueShort.FindStringSubmatch(s); m != nil {
+		return issueURL(m[1], m[2], "issues", m[3], bad)
+	}
+	if !strings.Contains(s, "://") {
+		s = "https://" + s
+	}
+	u, err := url.Parse(s)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || !strings.EqualFold(u.Host, "github.com") && !strings.EqualFold(u.Host, "www.github.com") {
+		return "", bad
+	}
+	m := issuePath.FindStringSubmatch(u.Path)
+	if m == nil {
+		return "", bad
+	}
+	return issueURL(m[1], m[2], m[3], m[4], bad)
+}
+
+// issueURL builds the URL of an issue from its parts, or returns bad. A
+// repository named . or .. would take the URL out of the repository when
+// it is opened, and issue numbers start at 1.
+func issueURL(owner, repo, kind, number string, bad error) (string, error) {
+	n, err := strconv.Atoi(number)
+	if err != nil || n <= 0 || repo == "." || repo == ".." {
+		return "", bad
+	}
+	return fmt.Sprintf("https://github.com/%s/%s/%s/%d", owner, repo, kind, n), nil
+}
+
+// IssueRef is the task's issue link as owner/repo#N, for showing where a
+// full URL would not fit, and as the https URL to open. Both are rebuilt
+// from the parts ParseIssue checks, so neither can carry characters that
+// a terminal would take as control codes. ok is false when there is no
+// link, or it is not one ParseIssue accepts, as from a hand-edited
+// database.
+func (t Task) IssueRef() (ref, link string, ok bool) {
+	link, err := ParseIssue(t.Issue)
+	if err != nil || link == "" {
+		return "", "", false
+	}
+	m := issuePath.FindStringSubmatch(strings.TrimPrefix(link, "https://github.com"))
+	return m[1] + "/" + m[2] + "#" + m[4], link, true
+}
+
+// IssueText is the task's issue for printing in full: the https URL when
+// ParseIssue accepts the stored value, and otherwise the value itself
+// without its control characters, so it cannot drive the terminal.
+func (t Task) IssueText() string {
+	if _, link, ok := t.IssueRef(); ok {
+		return link
+	}
+	return WithoutControls(t.Issue)
+}
+
+// WithoutControls drops control characters, C0 and C1, from s.
+func WithoutControls(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // ParseState accepts active, done or shelved.

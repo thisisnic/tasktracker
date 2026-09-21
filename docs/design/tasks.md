@@ -63,21 +63,41 @@ something inside a fold unfolds the way to it.
 
 ## Tasks
 
-- A task has a title, a status and an optional due date, and nothing else
-  for now.
+- A task has a title, a status, an optional due date and an optional
+  link to a GitHub issue, and nothing else for now.
 - Statuses: `todo`, `doing`, `done`, with `dropped` for things decided
   against.
 - No priority, estimate, notes or comments. Those are the issue-tracker
   parts left out until they are missed.
+
+### Issue links
+
+Some tasks are the local end of work tracked on GitHub. The task keeps a
+link to that issue so the discussion is one step away, and tasktracker
+does nothing more with it: no fetching, no syncing of state, no token.
+The task's own status is still set by hand.
+
+- One link per task, optional. A task that spans several issues can use
+  subtasks, or the one issue that gathers them.
+- Only GitHub issue and pull request URLs are accepted, so a typo is
+  caught when the link is typed rather than when it fails to open. The
+  shorthand `owner/repo#N` is accepted too.
+- The link is stored as the full https URL whatever form was typed, so
+  every stored link opens as it is. The shorthand becomes an issues URL,
+  which GitHub redirects to the pull request when the number is one.
+- Displays that have little room show `owner/repo#N`; the TUI makes it a
+  terminal hyperlink to the URL.
+- A copy does not take the original's link. The issue belongs to the
+  original's piece of work, and the copy is new work.
 
 ### Copying
 
 Some tasks look like ones already listed: the same checklist, another
 date. A copy saves retyping them. The copy takes the original's title,
 due date and project, any of which can be changed on the way, starts as
-todo, and gets the original's subtasks unticked. The original is not
-touched. There is no link between the two afterwards; a copy is just a
-new task that started filled in.
+todo with no issue link, and gets the original's subtasks unticked. The
+original is not touched. There is no link between the two afterwards; a
+copy is just a new task that started filled in.
 
 ### Archiving
 

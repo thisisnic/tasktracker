@@ -556,7 +556,7 @@ func TestDeadlineView(t *testing.T) {
 		t.Fatal("a did not open the form in the deadline view")
 	}
 	typeText(m, "sooner")
-	press(m, "enter", "enter", "enter")
+	press(m, "enter", "enter", "enter", "enter")
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("form: mode=%v err=%v", m.mode, m.err)
 	}
@@ -662,7 +662,7 @@ func TestDeadlineFold(t *testing.T) {
 	press(m, "G", "e") // email accountant: give it a date within the week
 	press(m, "enter")
 	typeText(m, "tomorrow")
-	press(m, "enter", "enter", "enter")
+	press(m, "enter", "enter", "enter", "enter")
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("form: mode=%v err=%v", m.mode, m.err)
 	}
@@ -816,13 +816,23 @@ func TestAddTaskViaForm(t *testing.T) {
 	typeText(m, "send invoice")
 	press(m, "enter") // task -> due
 	typeText(m, "tomorrow")
-	press(m, "enter") // due -> project (prefilled: work)
+	press(m, "enter") // due -> issue
+	typeText(m, "not an issue")
+	press(m, "enter") // refused: stays on issue
+	if m.mode != modeForm {
+		t.Fatalf("bad issue accepted: mode=%v", m.mode)
+	}
+	for range len("not an issue") {
+		press(m, "backspace")
+	}
+	typeText(m, "owner/repo#42")
+	press(m, "enter") // issue -> project (prefilled: work)
 	press(m, "enter") // submit
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("form did not close cleanly: mode=%v err=%v", m.mode, m.err)
 	}
 	tasks, _ := store.ListTasks(context.Background(), task.TaskFilter{ProjectID: 2})
-	if len(tasks) != 2 || tasks[1].Title != "send invoice" || tasks[1].Due != "2026-09-18" {
+	if len(tasks) != 2 || tasks[1].Title != "send invoice" || tasks[1].Due != "2026-09-18" || tasks[1].Issue != "https://github.com/owner/repo/issues/42" {
 		t.Errorf("saved task: %+v", tasks)
 	}
 	if r, _ := m.selected(); r.target() != (target{rowTask, tasks[1].ID}) {
@@ -830,6 +840,13 @@ func TestAddTaskViaForm(t *testing.T) {
 	}
 	if !strings.Contains(plain(m), "tomorrow") {
 		t.Error("due words not shown")
+	}
+	// The detail pane shows the link short, as a terminal hyperlink.
+	if !strings.Contains(plain(m), "issue   owner/repo#42") {
+		t.Errorf("issue not in the detail pane:\n%s", plain(m))
+	}
+	if !strings.Contains(m.View().Content, "https://github.com/owner/repo/issues/42") {
+		t.Error("issue ref is not a hyperlink to the URL")
 	}
 }
 
@@ -858,7 +875,7 @@ func TestFormStaysOpenWhenSaveFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	typeText(m, " again")
-	press(m, "enter", "enter", "enter", "enter")
+	press(m, "enter", "enter", "enter", "enter", "enter")
 	if m.mode != modeForm || m.err == nil {
 		t.Fatalf("failed save: mode=%v err=%v", m.mode, m.err)
 	}
@@ -1031,6 +1048,11 @@ func TestDeadlineViewRowStyling(t *testing.T) {
 func TestCopyTaskViaForm(t *testing.T) {
 	m, store := setup(t, nil)
 	ctx := context.Background()
+	issue := "owner/repo#1"
+	if _, err := store.UpdateTask(ctx, 1, task.TaskEdit{Issue: &issue}); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "r")
 	press(m, "c") // on a project
 	if m.mode != modeBrowse || !strings.Contains(m.status, "select a task") {
 		t.Errorf("c on project: mode=%v status=%q", m.mode, m.status)
@@ -1043,7 +1065,8 @@ func TestCopyTaskViaForm(t *testing.T) {
 		t.Errorf("copy form title:\n%s", plain(m))
 	}
 	tf, ok := m.form.(*taskForm)
-	if !ok || tf.copyFrom != 1 || tf.title != "paint the hall" || tf.due != "2026-09-10" || tf.project != 1 {
+	// The original's issue is not the copy's: the field starts blank.
+	if !ok || tf.copyFrom != 1 || tf.title != "paint the hall" || tf.due != "2026-09-10" || tf.issue != "" || tf.project != 1 {
 		t.Fatalf("copy form not filled in: %+v", m.form)
 	}
 	typeText(m, " upstairs")
@@ -1052,7 +1075,8 @@ func TestCopyTaskViaForm(t *testing.T) {
 		press(m, "backspace")
 	}
 	typeText(m, "tomorrow")
-	press(m, "enter")      // due -> project
+	press(m, "enter")      // due -> issue (blank)
+	press(m, "enter")      // issue -> project
 	press(m, "j", "enter") // house -> work, submit
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("form: mode=%v err=%v", m.mode, m.err)
@@ -1061,7 +1085,7 @@ func TestCopyTaskViaForm(t *testing.T) {
 		t.Errorf("status: %q", m.status)
 	}
 	got, err := store.GetTask(ctx, 4)
-	if err != nil || got.Title != "paint the hall upstairs" || got.Due != "2026-09-18" || got.ProjectID != 2 || got.Status != task.Todo {
+	if err != nil || got.Title != "paint the hall upstairs" || got.Due != "2026-09-18" || got.Issue != "" || got.ProjectID != 2 || got.Status != task.Todo {
 		t.Errorf("the copy: %+v, %v", got, err)
 	}
 	subs, _ := store.ListSubtasks(ctx, 4)
@@ -1082,7 +1106,7 @@ func TestCopyTaskViaForm(t *testing.T) {
 	if !strings.Contains(plain(m), "copied from #3\n") && !strings.Contains(plain(m), "copied from #3 ") {
 		t.Errorf("copy form title for a task with no subtasks:\n%s", plain(m))
 	}
-	press(m, "enter", "enter", "enter")
+	press(m, "enter", "enter", "enter", "enter")
 	if m.mode != modeBrowse || m.err != nil || m.status != "copied task #3 to task #5" {
 		t.Errorf("plain copy: mode=%v err=%v status=%q", m.mode, m.err, m.status)
 	}
@@ -1099,18 +1123,74 @@ func TestEditTaskViaForm(t *testing.T) {
 	for range len("2026-09-10") {
 		press(m, "backspace")
 	}
-	press(m, "enter")      // due (blank) -> status
+	press(m, "enter") // due (blank) -> issue
+	typeText(m, "https://github.com/owner/repo/pull/7")
+	press(m, "enter")      // issue -> status
 	press(m, "j", "enter") // todo -> doing, -> project
 	press(m, "j", "enter") // house -> work, submit
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("form: mode=%v err=%v", m.mode, m.err)
 	}
 	tk, _ := store.GetTask(context.Background(), 1)
-	if tk.Title != "paint the hall today" || tk.Due != "" || tk.Status != task.Doing || tk.ProjectID != 2 {
+	if tk.Title != "paint the hall today" || tk.Due != "" || tk.Issue != "https://github.com/owner/repo/pull/7" || tk.Status != task.Doing || tk.ProjectID != 2 {
 		t.Errorf("edited task: %+v", tk)
 	}
 	if got := labels(m); !reflect.DeepEqual(got, []string{"P:house", "T:fix the gate", "P:work", "T:paint the hall today", "S:buy paint", "S:move furniture", "T:email accountant"}) {
 		t.Errorf("rows after move: %v", got)
+	}
+}
+
+// TestUnrecognisedIssue covers a stored issue that ParseIssue did not
+// write, as from a hand-edited database: the detail pane shows it without
+// its control characters, and the edit form keeps it and saves the other
+// fields.
+func TestUnrecognisedIssue(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "tasktracker.db")
+	store, err := task.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	p, err := store.AddProject(ctx, task.NewProject{Name: "garden"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddTask(ctx, task.NewTask{ProjectID: p.ID, Title: "mend the fence"}); err != nil {
+		t.Fatal(err)
+	}
+	const odd = "the fence ticket\x1b[2J"
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE tasks SET issue = ? WHERE id = 1`, odd); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	m := newModel(ctx, store, nil)
+	m.now = func() time.Time { return fixed }
+	if err := m.reload(); err != nil {
+		t.Fatal(err)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	press(m, "j")
+	if !strings.Contains(plain(m), "issue   the fence ticket[2J") {
+		t.Errorf("odd issue not in the detail pane:\n%s", plain(m))
+	}
+	if strings.Contains(m.View().Content, "\x1b[2J") {
+		t.Error("the stored issue's escape sequence reached the screen")
+	}
+
+	press(m, "e")
+	typeText(m, " today")
+	press(m, "enter", "enter", "enter", "enter", "enter") // title, due, issue, status, project
+	if m.mode != modeBrowse || m.err != nil {
+		t.Fatalf("form: mode=%v err=%v", m.mode, m.err)
+	}
+	if got, _ := store.GetTask(ctx, 1); got.Title != "mend the fence today" || got.Issue != odd {
+		t.Errorf("after editing the title: %+v", got)
 	}
 }
 
@@ -1364,7 +1444,7 @@ func TestCollapse(t *testing.T) {
 	// Adding a task to a collapsed project shows it again.
 	press(m, "a")
 	typeText(m, "send invoice")
-	press(m, "enter", "enter", "enter") // title -> due -> project -> submit
+	press(m, "enter", "enter", "enter", "enter") // title -> due -> issue -> project -> submit
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("task form: mode=%v err=%v", m.mode, m.err)
 	}

@@ -292,6 +292,54 @@ func TestCopyTask(t *testing.T) {
 	}
 }
 
+func TestTaskIssue(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	p := addProject(t, s, NewProject{Name: "house"})
+	tk := addTask(t, s, NewTask{ProjectID: p.ID, Title: "fix the gate", Issue: "owner/repo#42"})
+	if tk.Issue != "https://github.com/owner/repo/issues/42" {
+		t.Errorf("added issue = %q", tk.Issue)
+	}
+	if _, err := s.AddTask(ctx, NewTask{ProjectID: p.ID, Title: "x", Issue: "the gate one"}); err == nil {
+		t.Error("bad issue accepted on add")
+	}
+
+	// An edit that leaves the issue alone keeps it.
+	title := "fix the side gate"
+	if got, err := s.UpdateTask(ctx, tk.ID, TaskEdit{Title: &title}); err != nil || got.Issue != tk.Issue {
+		t.Errorf("rename: %+v, %v", got, err)
+	}
+	link := "https://github.com/owner/repo/pull/7"
+	if got, err := s.UpdateTask(ctx, tk.ID, TaskEdit{Issue: &link}); err != nil || got.Issue != link {
+		t.Errorf("new issue: %+v, %v", got, err)
+	}
+	bad := "soon"
+	if _, err := s.UpdateTask(ctx, tk.ID, TaskEdit{Issue: &bad}); err == nil {
+		t.Error("bad issue accepted on edit")
+	}
+	if got, _ := s.GetTask(ctx, tk.ID); got.Issue != link {
+		t.Errorf("a refused edit changed the issue: %q", got.Issue)
+	}
+
+	// A copy has no issue unless it is given one.
+	n, err := s.CopyTask(ctx, tk.ID, TaskEdit{})
+	if err != nil || n.Task.Issue != "" {
+		t.Errorf("plain copy: %+v, %v", n.Task, err)
+	}
+	other := "owner/repo#43"
+	if n, err := s.CopyTask(ctx, tk.ID, TaskEdit{Issue: &other}); err != nil || n.Task.Issue != "https://github.com/owner/repo/issues/43" {
+		t.Errorf("copy with an issue: %+v, %v", n.Task, err)
+	}
+	if _, err := s.CopyTask(ctx, tk.ID, TaskEdit{Issue: &bad}); err == nil {
+		t.Error("bad issue accepted on copy")
+	}
+
+	none := ""
+	if got, err := s.UpdateTask(ctx, tk.ID, TaskEdit{Issue: &none}); err != nil || got.Issue != "" {
+		t.Errorf("clearing the issue: %+v, %v", got, err)
+	}
+}
+
 func TestArchive(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)
@@ -380,6 +428,42 @@ func TestMigrateAddsArchived(t *testing.T) {
 	}
 	if len(tree) != 1 || len(tree[0].Tasks) != 2 || tree[0].Tasks[0].Task.Archived {
 		t.Errorf("tree after migration = %+v", tree)
+	}
+}
+
+// TestMigrateAddsIssue opens a database made before tasks had issue links
+// and checks the column is added with every task left without one.
+func TestMigrateAddsIssue(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := strings.Replace(schema, "\tissue      TEXT NOT NULL DEFAULT '',\n", "", 1)
+	if old == schema {
+		t.Fatal("schema no longer has the issue line this test removes")
+	}
+	if _, err := db.Exec(old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO projects (id, name, created_at) VALUES (1, 'p', '');
+		INSERT INTO tasks (id, project_id, title, created_at) VALUES (1, 1, 'old one', '')`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	got, err := s.GetTask(ctx, 1)
+	if err != nil || got.Title != "old one" || got.Issue != "" {
+		t.Errorf("task after migration = %+v, %v", got, err)
+	}
+	link := "owner/repo#1"
+	if got, err := s.UpdateTask(ctx, 1, TaskEdit{Issue: &link}); err != nil || got.Issue != "https://github.com/owner/repo/issues/1" {
+		t.Errorf("setting an issue after migration: %+v, %v", got, err)
 	}
 }
 

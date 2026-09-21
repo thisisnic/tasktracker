@@ -319,6 +319,57 @@ func TestCopyTask(t *testing.T) {
 	}
 }
 
+func TestTaskIssue(t *testing.T) {
+	r := newRunner(t)
+	r.run("", false, "project", "add", "house")
+	r.run("", false, "task", "add", "fix the gate", "--project", "1", "--issue", "owner/repo#42")
+	if out := r.run("", false, "task", "show", "1"); !strings.Contains(out, "issue:   https://github.com/owner/repo/issues/42") {
+		t.Errorf("show:\n%s", out)
+	}
+	if msg := r.run("", true, "task", "add", "x", "--project", "1", "--issue", "the gate"); !strings.Contains(msg, `issue "the gate"`) {
+		t.Errorf("bad issue on add: %q", msg)
+	}
+	r.run("", false, "task", "edit", "1", "--issue", "https://github.com/owner/repo/pull/7")
+	var node task.TaskNode
+	if err := json.Unmarshal([]byte(r.run("", false, "task", "show", "1", "--json")), &node); err != nil || node.Task.Issue != "https://github.com/owner/repo/pull/7" {
+		t.Errorf("after edit --issue: %+v, %v", node, err)
+	}
+	if msg := r.run("", true, "task", "edit", "1", "--issue", "owner/repo#1", "--no-issue"); !strings.Contains(msg, "none of the others can be") {
+		t.Errorf("edit with both issue flags: %q", msg)
+	}
+	// A copy leaves the original's issue behind unless given one.
+	var plainCopy task.TaskNode
+	if err := json.Unmarshal([]byte(r.run("", false, "task", "copy", "1", "--json")), &plainCopy); err != nil || plainCopy.Task.Issue != "" {
+		t.Errorf("copy: %+v, %v", plainCopy, err)
+	}
+	var linked task.TaskNode
+	if err := json.Unmarshal([]byte(r.run("", false, "task", "copy", "1", "--issue", "owner/repo#8", "--json")), &linked); err != nil || linked.Task.Issue != "https://github.com/owner/repo/issues/8" {
+		t.Errorf("copy --issue: %+v, %v", linked, err)
+	}
+	r.run("", false, "task", "edit", "1", "--no-issue")
+	if out := r.run("", false, "task", "show", "1"); strings.Contains(out, "issue:") {
+		t.Errorf("show after --no-issue:\n%s", out)
+	}
+	var cleared task.TaskNode
+	if err := json.Unmarshal([]byte(r.run("", false, "task", "show", "1", "--json")), &cleared); err != nil || cleared.Task.Issue != "" {
+		t.Errorf("after --no-issue: %+v, %v", cleared, err)
+	}
+
+	// A stored issue ParseIssue did not write, as from a hand-edited
+	// database, is shown without its control characters.
+	db, err := sql.Open("sqlite", r.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE tasks SET issue = ? WHERE id = 1`, "the fence ticket\x1b[2J"); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	if out := r.run("", false, "task", "show", "1"); !strings.Contains(out, "issue:   the fence ticket[2J\n") || strings.Contains(out, "\x1b") {
+		t.Errorf("show of an odd issue: %q", out)
+	}
+}
+
 func TestDueListing(t *testing.T) {
 	r := newRunner(t)
 	r.run("", false, "project", "add", "p")

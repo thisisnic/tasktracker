@@ -34,10 +34,11 @@ func taskAddCmd(dbPath *string) *cobra.Command {
 	var in task.NewTask
 	var asJSON bool
 	cmd := &cobra.Command{
-		Use:     "add TITLE --project ID",
-		Short:   "Add a task to a project",
-		Example: `  tasktracker task add "paint the hall" --project 1 --due 2026-10-01`,
-		Args:    cobra.ExactArgs(1),
+		Use:   "add TITLE --project ID",
+		Short: "Add a task to a project",
+		Example: `  tasktracker task add "paint the hall" --project 1 --due 2026-10-01
+  tasktracker task add "fix the login bug" --project 2 --issue owner/repo#42`,
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, err := openStore(dbPath)
 			if err != nil {
@@ -58,6 +59,7 @@ func taskAddCmd(dbPath *string) *cobra.Command {
 	}
 	cmd.Flags().Int64Var(&in.ProjectID, "project", 0, "id of the project the task belongs to (required)")
 	cmd.Flags().StringVar(&in.Due, "due", "", "due date: YYYY-MM-DD, today or tomorrow")
+	cmd.Flags().StringVar(&in.Issue, "issue", "", "GitHub issue: a URL or owner/repo#N")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print the task as JSON")
 	_ = cmd.MarkFlagRequired("project")
 	return cmd
@@ -197,6 +199,9 @@ func taskShowCmd(dbPath *string) *cobra.Command {
 				}
 				fmt.Fprintf(out, "due:     %s\n", line)
 			}
+			if t.Issue != "" {
+				fmt.Fprintf(out, "issue:   %s\n", t.IssueText())
+			}
 			if len(subs) > 0 {
 				fmt.Fprintln(out, "subtasks:")
 				for _, s := range subs {
@@ -239,12 +244,12 @@ func dueText(days int) string {
 }
 
 func taskEditCmd(dbPath *string) *cobra.Command {
-	var title, due string
+	var title, due, issue string
 	var project int64
-	var noDue bool
+	var noDue, noIssue bool
 	cmd := &cobra.Command{
 		Use:   "edit ID",
-		Short: "Change a task's title, due date or project",
+		Short: "Change a task's title, due date, issue or project",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := parseID("task", args[0])
@@ -263,6 +268,14 @@ func taskEditCmd(dbPath *string) *cobra.Command {
 				e.Due = &none
 			case cmd.Flags().Changed("due"):
 				e.Due = &due
+			}
+			// Cobra rejects --issue with --no-issue.
+			switch {
+			case noIssue:
+				none := ""
+				e.Issue = &none
+			case cmd.Flags().Changed("issue"):
+				e.Issue = &issue
 			}
 			if cmd.Flags().Changed("project") {
 				e.ProjectID = &project
@@ -286,12 +299,15 @@ func taskEditCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().StringVar(&title, "title", "", "new title")
 	cmd.Flags().StringVar(&due, "due", "", "new due date: YYYY-MM-DD, today or tomorrow")
 	cmd.Flags().BoolVar(&noDue, "no-due", false, "remove the due date")
+	cmd.Flags().StringVar(&issue, "issue", "", "new GitHub issue: a URL or owner/repo#N")
+	cmd.Flags().BoolVar(&noIssue, "no-issue", false, "remove the issue link")
 	cmd.Flags().Int64Var(&project, "project", 0, "move the task to this project")
+	cmd.MarkFlagsMutuallyExclusive("issue", "no-issue")
 	return cmd
 }
 
 func taskCopyCmd(dbPath *string) *cobra.Command {
-	var title, due string
+	var title, due, issue string
 	var project int64
 	var noDue, asJSON bool
 	cmd := &cobra.Command{
@@ -299,7 +315,7 @@ func taskCopyCmd(dbPath *string) *cobra.Command {
 		Short: "Make a new task from an existing one",
 		Long: `Copy a task: the new task takes the original's title, due date and project
 unless a flag says otherwise, starts as todo, and gets the original's subtasks
-unticked.`,
+unticked. The original's issue link is not copied; --issue gives the copy one.`,
 		Example: `  tasktracker task copy 3 --title "paint the landing" --due 2026-11-01`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -319,6 +335,9 @@ unticked.`,
 				e.Due = &none
 			case cmd.Flags().Changed("due"):
 				e.Due = &due
+			}
+			if cmd.Flags().Changed("issue") {
+				e.Issue = &issue
 			}
 			if cmd.Flags().Changed("project") {
 				e.ProjectID = &project
@@ -342,6 +361,7 @@ unticked.`,
 	cmd.Flags().StringVar(&title, "title", "", "title for the copy; the original's if not given")
 	cmd.Flags().StringVar(&due, "due", "", "due date for the copy: YYYY-MM-DD, today or tomorrow")
 	cmd.Flags().BoolVar(&noDue, "no-due", false, "give the copy no due date")
+	cmd.Flags().StringVar(&issue, "issue", "", "GitHub issue for the copy: a URL or owner/repo#N")
 	cmd.Flags().Int64Var(&project, "project", 0, "put the copy in this project")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print the copy with its subtasks as JSON")
 	return cmd
