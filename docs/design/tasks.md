@@ -63,12 +63,32 @@ something inside a fold unfolds the way to it.
 
 ## Tasks
 
-- A task has a title, a status, an optional due date and an optional
-  link to a GitHub issue, and nothing else for now.
+- A task has a title, a status, an optional due date, an optional link
+  to a GitHub issue and a block of notes, and nothing else for now.
 - Statuses: `todo`, `doing`, `done`, with `dropped` for things decided
   against.
-- No priority, estimate, notes or comments. Those are the issue-tracker
-  parts left out until they are missed.
+- No priority, estimate or comments. Those are the issue-tracker parts
+  left out until they are missed. Notes were the first to be missed.
+
+### Notes
+
+A task often has something worth keeping next to it: where a thing is,
+what was agreed, what to try next. The notes are one block of free text
+on the task, not dated entries; a running log is what comments would be,
+and those are still left out.
+
+- Notes are a field in the task form like the title and the due date,
+  rather than an editor of their own, so there is one way to change a
+  task. The field is a few lines tall and scrolls; a new line is
+  `ctrl+j`, since enter moves to the next field as it does everywhere in
+  the form.
+- Blank lines at either end are dropped on save, so an accidental enter
+  does not leave a gap. A leading indent is kept.
+- The detail pane shows the notes after the subtasks, which are shorter
+  and the thing to tick off; the row carries a `≡` so a task with notes
+  can be told from one without before it is selected.
+- A copy takes the original's notes along with its title and subtasks,
+  since they describe the work; the copy form shows them to be changed.
 
 ### Issue links
 
@@ -94,8 +114,9 @@ The task's own status is still set by hand.
 
 Some tasks look like ones already listed: the same checklist, another
 date. A copy saves retyping them. The copy takes the original's title,
-due date and project, any of which can be changed on the way, starts as
-todo with no issue link, and gets the original's subtasks unticked. The
+due date, notes and project, any of which can be changed on the way,
+starts as todo with no issue link, and gets the original's subtasks
+unticked. The
 original is not touched. There is no link between the two afterwards; a
 copy is just a new task that started filled in.
 

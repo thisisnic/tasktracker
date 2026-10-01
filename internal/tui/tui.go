@@ -1252,7 +1252,7 @@ func (m *model) View() tea.View {
 	// paneStyle's Width and Height include its border and padding, so the
 	// content area is 4 narrower (border 2 + padding 2) and 2 shorter.
 	left := paneStyle.Width(listW).Height(bodyH).Render(m.viewList(listW-4, bodyH-2))
-	right := paneStyle.Width(detailW).Height(bodyH).Render(clipLines(m.viewDetail(detailW-4, bodyH-2), bodyH-2))
+	right := paneStyle.Width(detailW).Height(bodyH).Render(clipLines(m.viewDetail(detailW-4), bodyH-2))
 
 	var b strings.Builder
 	head := titleStyle.Render("tasktracker · " + m.view.String())
@@ -1365,6 +1365,9 @@ func (m *model) viewRow(r row, selected bool, w int) string {
 		if n := len(r.task.Subtasks); n > 0 {
 			parts = append(parts, fmt.Sprintf("%d/%d", r.task.Ticked(), n))
 		}
+		if t.Notes != "" {
+			parts = append(parts, "≡")
+		}
 		if t.Archived {
 			parts = append(parts, "archived")
 		}
@@ -1439,8 +1442,9 @@ func fit(left, right string, w int) string {
 	return left + strings.Repeat(" ", pad) + right
 }
 
-// viewDetail renders the selected row into a w by h area.
-func (m *model) viewDetail(w, h int) string {
+// viewDetail renders the selected row w wide, as many lines as it takes;
+// the caller clips it to the pane with clipLines.
+func (m *model) viewDetail(w int) string {
 	r, ok := m.selected()
 	if !ok {
 		return ""
@@ -1533,6 +1537,10 @@ func (m *model) viewDetail(w, h int) string {
 				lines = append(lines, cut("  "+box+" "+s.Title))
 			}
 		}
+		if t.Notes != "" {
+			lines = append(lines, "", labelStyle.Render("notes"))
+			lines = append(lines, strings.Split(wrap.Render(t.Notes), "\n")...)
+		}
 	case rowSubtask:
 		s := r.subtask
 		lines = append(lines, strings.Split(wrap.Bold(true).Render(s.Title), "\n")...)
@@ -1544,9 +1552,8 @@ func (m *model) viewDetail(w, h int) string {
 		}
 		lines = append(lines, label("done   ", state+"   "+labelStyle.Render("id")+fmt.Sprintf(" #%d", s.ID)))
 	}
-	if len(lines) > h {
-		lines = lines[:h]
-	}
+	// clipLines marks what it cuts, so notes under a long checklist are
+	// seen to be cut rather than missing.
 	return strings.Join(lines, "\n")
 }
 

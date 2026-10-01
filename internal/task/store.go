@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 	status     TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo','doing','done','dropped')),
 	due        TEXT NOT NULL DEFAULT '',
 	issue      TEXT NOT NULL DEFAULT '',
+	notes      TEXT NOT NULL DEFAULT '',
 	archived   INTEGER NOT NULL DEFAULT 0,
 	created_at TEXT NOT NULL
 );
@@ -158,6 +159,16 @@ func migrate(db *sql.DB) error {
 	if !has {
 		// Empty is no link, which is what every existing task has.
 		if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN issue TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	has, err = hasColumn(db, "tasks", "notes")
+	if err != nil {
+		return err
+	}
+	if !has {
+		// Empty is no notes, which is what every existing task has.
+		if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN notes TEXT NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
 	}
@@ -538,6 +549,7 @@ type NewTask struct {
 	Title     string
 	Due       string // anything ParseDue accepts, or empty for none
 	Issue     string // anything ParseIssue accepts, or empty for none
+	Notes     string // free text; blank lines at either end are dropped
 }
 
 // AddTask validates and inserts a task under a project.
@@ -557,8 +569,8 @@ func (s *Store) AddTask(ctx context.Context, in NewTask) (Task, error) {
 	if _, err := s.GetProject(ctx, in.ProjectID); err != nil {
 		return Task{}, fmt.Errorf("project %d: %w", in.ProjectID, err)
 	}
-	res, err := s.db.ExecContext(ctx, `INSERT INTO tasks (project_id, title, status, due, issue, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		in.ProjectID, in.Title, string(Todo), due, issue, now())
+	res, err := s.db.ExecContext(ctx, `INSERT INTO tasks (project_id, title, status, due, issue, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		in.ProjectID, in.Title, string(Todo), due, issue, trimBlankLines(in.Notes), now())
 	if err != nil {
 		return Task{}, err
 	}
@@ -569,12 +581,12 @@ func (s *Store) AddTask(ctx context.Context, in NewTask) (Task, error) {
 	return s.GetTask(ctx, id)
 }
 
-const selectTask = `SELECT id, project_id, title, status, due, issue, archived, created_at FROM tasks`
+const selectTask = `SELECT id, project_id, title, status, due, issue, notes, archived, created_at FROM tasks`
 
 func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 	var t Task
 	var created string
-	if err := row.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Status, &t.Due, &t.Issue, &t.Archived, &created); err != nil {
+	if err := row.Scan(&t.ID, &t.ProjectID, &t.Title, &t.Status, &t.Due, &t.Issue, &t.Notes, &t.Archived, &created); err != nil {
 		return Task{}, err
 	}
 	t.CreatedAt = parseTime(created)
@@ -654,6 +666,7 @@ type TaskEdit struct {
 	Title     *string
 	Due       *string // empty clears it
 	Issue     *string // empty clears it
+	Notes     *string // empty clears them
 	Status    *Status
 	ProjectID *int64 // move the task to another project
 }
@@ -684,6 +697,9 @@ func (s *Store) UpdateTask(ctx context.Context, id int64, e TaskEdit) (Task, err
 			return Task{}, err
 		}
 	}
+	if e.Notes != nil {
+		t.Notes = trimBlankLines(*e.Notes)
+	}
 	if e.Status != nil {
 		if err := checkStatus(*e.Status); err != nil {
 			return Task{}, err
@@ -699,7 +715,7 @@ func (s *Store) UpdateTask(ctx context.Context, id int64, e TaskEdit) (Task, err
 	if t.Open() {
 		t.Archived = false
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET title = ?, due = ?, issue = ?, status = ?, project_id = ?, archived = ? WHERE id = ?`, t.Title, t.Due, t.Issue, string(t.Status), t.ProjectID, t.Archived, id); err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET title = ?, due = ?, issue = ?, notes = ?, status = ?, project_id = ?, archived = ? WHERE id = ?`, t.Title, t.Due, t.Issue, t.Notes, string(t.Status), t.ProjectID, t.Archived, id); err != nil {
 		return Task{}, err
 	}
 	return s.GetTask(ctx, id)
@@ -707,11 +723,11 @@ func (s *Store) UpdateTask(ctx context.Context, id int64, e TaskEdit) (Task, err
 
 // CopyTask makes a new task from an existing one, for work that looks
 // like something already listed. The copy takes the original's title, due
-// date and project, with any non-nil fields of e in their place, and
-// always starts as todo: a Status in e is an error. It has no issue link
-// unless e gives one, since the original's issue is the original's work.
-// Its subtasks are copied unticked. The new task and its subtasks are
-// returned.
+// date, notes and project, with any non-nil fields of e in their place,
+// and always starts as todo: a Status in e is an error. It has no issue
+// link unless e gives one, since the original's issue is the original's
+// work. Its subtasks are copied unticked. The new task and its subtasks
+// are returned.
 func (s *Store) CopyTask(ctx context.Context, id int64, e TaskEdit) (TaskNode, error) {
 	// The overrides are checked first, so a bad one fails before anything
 	// is read or written.
@@ -752,18 +768,21 @@ func (s *Store) CopyTask(ctx context.Context, id int64, e TaskEdit) (TaskNode, e
 		if err != nil {
 			return err
 		}
-		t := Task{ProjectID: from.ProjectID, Title: from.Title, Status: Todo, Due: from.Due, Issue: issue}
+		t := Task{ProjectID: from.ProjectID, Title: from.Title, Status: Todo, Due: from.Due, Issue: issue, Notes: from.Notes}
 		if e.Title != nil {
 			t.Title = strings.TrimSpace(*e.Title)
 		}
 		if e.Due != nil {
 			t.Due = due
 		}
+		if e.Notes != nil {
+			t.Notes = trimBlankLines(*e.Notes)
+		}
 		if e.ProjectID != nil {
 			t.ProjectID = *e.ProjectID
 		}
-		res, err := tx.ExecContext(ctx, `INSERT INTO tasks (project_id, title, status, due, issue, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-			t.ProjectID, t.Title, string(t.Status), t.Due, t.Issue, now())
+		res, err := tx.ExecContext(ctx, `INSERT INTO tasks (project_id, title, status, due, issue, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			t.ProjectID, t.Title, string(t.Status), t.Due, t.Issue, t.Notes, now())
 		if err != nil {
 			return err
 		}
@@ -788,6 +807,19 @@ func (s *Store) CopyTask(ctx context.Context, id int64, e TaskEdit) (TaskNode, e
 		copied = []Subtask{}
 	}
 	return TaskNode{Task: t, Subtasks: copied}, nil
+}
+
+// trimBlankLines drops whole blank lines at either end of a text block but
+// keeps a leading indent, since a note's first line may be indented.
+func trimBlankLines(s string) string {
+	lines := strings.Split(s, "\n")
+	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
+		lines = lines[1:]
+	}
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	return strings.TrimRight(strings.Join(lines, "\n"), " \t\r")
 }
 
 // MarkTask sets a task's status. Marking a task todo or doing also brings

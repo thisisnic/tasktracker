@@ -32,8 +32,9 @@ n area · A project · a task · s subtask · c copy task · e edit · space nex
 1. Make a project. Give it a description and, if you like, the ids of the
    goaltracker goals it serves.
 2. Add tasks to it. A task has a title, a status (`todo`, `doing`, `done`
-   or `dropped`), an optional due date and an optional link to a GitHub
-   issue.
+   or `dropped`), an optional due date, an optional link to a GitHub
+   issue, and notes: a block of free text for whatever is worth keeping
+   next to it.
 3. Break a task into subtasks when it helps: a checklist of titles with a
    tick each. Ticking every item does not finish the task; you mark that
    yourself.
@@ -105,12 +106,15 @@ tasktracker task list --due --json
   it tracks. Paste the URL or type `owner/repo#42` in the task form, or
   pass `--issue`; the detail pane shows it as `owner/repo#42`, a link your
   terminal can open if it supports them. A copy starts without one.
+- **Notes** - A block of free text on each task, edited in the task form
+  with the other fields; `ctrl+j` starts a new line. The detail pane shows
+  the notes under the subtasks, and a `≡` on the row says there are some.
 - **Checklists** - Subtasks are a title and a tick. The task's row shows
   how many are done.
 - **Copy a task** - `c` on a task opens the form filled in from it, for
   work that looks like something already listed. Change what differs
-  and save; the copy starts as todo with the original's checklist,
-  unticked.
+  and save; the copy starts as todo with the original's notes and its
+  checklist, unticked.
 - **Goal links** - A project stores the ids of the goaltracker goals it
   serves. tasktracker reads goaltracker's database read-only to show their
   statements, and offers them as a pick list in the project form. Without
@@ -211,11 +215,11 @@ tasktracker update            # install it
 | `tasktracker project edit ID` | Change name, description, area or goals; `--in` / `--top` move it, `--goal` replaces the set, `--no-goals` clears it |
 | `tasktracker project mark ID active\|done\|shelved` | Set a project's state |
 | `tasktracker project delete ID` | Delete a project with all its tasks; `--yes` |
-| `tasktracker task add TITLE --project ID` | Add a task; `--due`, `--issue`, `--json` |
+| `tasktracker task add TITLE --project ID` | Add a task; `--due`, `--issue`, `--notes`, `--json` |
 | `tasktracker task list` | Show the tree of areas, projects and tasks; `--open`, `--all`, `--project`, `--status`, `--due`, `--json` |
 | `tasktracker task show ID` | One task with its subtasks; `--json` |
-| `tasktracker task edit ID` | Change title, due date, issue or project; `--no-due`, `--no-issue` |
-| `tasktracker task copy ID` | New task from an existing one, subtasks included; `--title`, `--due`, `--no-due`, `--issue`, `--project`, `--json` |
+| `tasktracker task edit ID` | Change title, due date, issue, notes or project; `--no-due`, `--no-issue`, `--no-notes` |
+| `tasktracker task copy ID` | New task from an existing one, notes and subtasks included; `--title`, `--due`, `--no-due`, `--issue`, `--notes`, `--no-notes`, `--project`, `--json` |
 | `tasktracker task mark ID todo\|doing\|done\|dropped` | Set a task's status |
 | `tasktracker task archive ID` / `unarchive ID` | Put a finished task out of the tree, or bring it back |
 | `tasktracker task delete ID` | Delete a task and its subtasks; `--yes` |

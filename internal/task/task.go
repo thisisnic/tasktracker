@@ -4,8 +4,9 @@
 // The hierarchy is project > task > subtask, with areas above projects for
 // grouping: an area holds projects and other areas. A project has a name, a
 // description, an end state and zero or more links to goals in goaltracker.
-// A task has a title, a status, an optional due date and an optional link
-// to a GitHub issue. A subtask is a checklist item: a title and a tick.
+// A task has a title, a status, an optional due date, an optional link to
+// a GitHub issue and a block of notes. A subtask is a checklist item: a
+// title and a tick.
 // Ticking every subtask does not finish the task; the owner marks it done
 // themselves. A finished task stays in the tree until it is archived,
 // which is the one way to hide it.
@@ -67,6 +68,7 @@ type Task struct {
 	Status    Status `json:"status"`
 	Due       string `json:"due,omitempty"`   // YYYY-MM-DD, or empty for none
 	Issue     string `json:"issue,omitempty"` // a GitHub issue or pull request URL, or empty for none
+	Notes     string `json:"notes,omitempty"` // free text; blank lines at either end are dropped
 	// Archived is set on a finished task that has been put away. An open
 	// task is never archived: marking an archived task todo or doing
 	// brings it back.

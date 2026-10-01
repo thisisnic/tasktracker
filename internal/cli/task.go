@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -60,6 +61,7 @@ func taskAddCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().Int64Var(&in.ProjectID, "project", 0, "id of the project the task belongs to (required)")
 	cmd.Flags().StringVar(&in.Due, "due", "", "due date: YYYY-MM-DD, today or tomorrow")
 	cmd.Flags().StringVar(&in.Issue, "issue", "", "GitHub issue: a URL or owner/repo#N")
+	cmd.Flags().StringVar(&in.Notes, "notes", "", "notes to keep with the task")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print the task as JSON")
 	_ = cmd.MarkFlagRequired("project")
 	return cmd
@@ -202,6 +204,12 @@ func taskShowCmd(dbPath *string) *cobra.Command {
 			if t.Issue != "" {
 				fmt.Fprintf(out, "issue:   %s\n", t.IssueText())
 			}
+			if t.Notes != "" {
+				fmt.Fprintln(out, "notes:")
+				for _, line := range strings.Split(t.Notes, "\n") {
+					fmt.Fprintf(out, "  %s\n", line)
+				}
+			}
 			if len(subs) > 0 {
 				fmt.Fprintln(out, "subtasks:")
 				for _, s := range subs {
@@ -244,12 +252,12 @@ func dueText(days int) string {
 }
 
 func taskEditCmd(dbPath *string) *cobra.Command {
-	var title, due, issue string
+	var title, due, issue, notes string
 	var project int64
-	var noDue, noIssue bool
+	var noDue, noIssue, noNotes bool
 	cmd := &cobra.Command{
 		Use:   "edit ID",
-		Short: "Change a task's title, due date, issue or project",
+		Short: "Change a task's title, due date, issue, notes or project",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := parseID("task", args[0])
@@ -269,13 +277,21 @@ func taskEditCmd(dbPath *string) *cobra.Command {
 			case cmd.Flags().Changed("due"):
 				e.Due = &due
 			}
-			// Cobra rejects --issue with --no-issue.
+			// Cobra rejects --issue with --no-issue, and --notes with
+			// --no-notes.
 			switch {
 			case noIssue:
 				none := ""
 				e.Issue = &none
 			case cmd.Flags().Changed("issue"):
 				e.Issue = &issue
+			}
+			switch {
+			case noNotes:
+				none := ""
+				e.Notes = &none
+			case cmd.Flags().Changed("notes"):
+				e.Notes = &notes
 			}
 			if cmd.Flags().Changed("project") {
 				e.ProjectID = &project
@@ -301,21 +317,25 @@ func taskEditCmd(dbPath *string) *cobra.Command {
 	cmd.Flags().BoolVar(&noDue, "no-due", false, "remove the due date")
 	cmd.Flags().StringVar(&issue, "issue", "", "new GitHub issue: a URL or owner/repo#N")
 	cmd.Flags().BoolVar(&noIssue, "no-issue", false, "remove the issue link")
+	cmd.Flags().StringVar(&notes, "notes", "", "new notes, replacing the old")
+	cmd.Flags().BoolVar(&noNotes, "no-notes", false, "remove the notes")
 	cmd.Flags().Int64Var(&project, "project", 0, "move the task to this project")
 	cmd.MarkFlagsMutuallyExclusive("issue", "no-issue")
+	cmd.MarkFlagsMutuallyExclusive("notes", "no-notes")
 	return cmd
 }
 
 func taskCopyCmd(dbPath *string) *cobra.Command {
-	var title, due, issue string
+	var title, due, issue, notes string
 	var project int64
-	var noDue, asJSON bool
+	var noDue, noNotes, asJSON bool
 	cmd := &cobra.Command{
 		Use:   "copy ID",
 		Short: "Make a new task from an existing one",
-		Long: `Copy a task: the new task takes the original's title, due date and project
-unless a flag says otherwise, starts as todo, and gets the original's subtasks
-unticked. The original's issue link is not copied; --issue gives the copy one.`,
+		Long: `Copy a task: the new task takes the original's title, due date, notes and
+project unless a flag says otherwise, starts as todo, and gets the original's
+subtasks unticked. The original's issue link is not copied; --issue gives the
+copy one.`,
 		Example: `  tasktracker task copy 3 --title "paint the landing" --due 2026-11-01`,
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -338,6 +358,14 @@ unticked. The original's issue link is not copied; --issue gives the copy one.`,
 			}
 			if cmd.Flags().Changed("issue") {
 				e.Issue = &issue
+			}
+			// Cobra rejects --notes with --no-notes.
+			switch {
+			case noNotes:
+				none := ""
+				e.Notes = &none
+			case cmd.Flags().Changed("notes"):
+				e.Notes = &notes
 			}
 			if cmd.Flags().Changed("project") {
 				e.ProjectID = &project
@@ -362,8 +390,11 @@ unticked. The original's issue link is not copied; --issue gives the copy one.`,
 	cmd.Flags().StringVar(&due, "due", "", "due date for the copy: YYYY-MM-DD, today or tomorrow")
 	cmd.Flags().BoolVar(&noDue, "no-due", false, "give the copy no due date")
 	cmd.Flags().StringVar(&issue, "issue", "", "GitHub issue for the copy: a URL or owner/repo#N")
+	cmd.Flags().StringVar(&notes, "notes", "", "notes for the copy; the original's if not given")
+	cmd.Flags().BoolVar(&noNotes, "no-notes", false, "give the copy no notes")
 	cmd.Flags().Int64Var(&project, "project", 0, "put the copy in this project")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print the copy with its subtasks as JSON")
+	cmd.MarkFlagsMutuallyExclusive("notes", "no-notes")
 	return cmd
 }
 

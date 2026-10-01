@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -196,6 +197,18 @@ func typeText(m *model, s string) {
 // plain renders the view without escape codes, so text split by styling
 // can be matched as one string.
 func plain(m *model) string { return ansi.Strip(m.View().Content) }
+
+// withNotes puts notes on task #1, paint the hall, and reloads.
+func withNotes(t *testing.T, m *model, store *task.Store) {
+	t.Helper()
+	notes := "two coats"
+	if _, err := store.UpdateTask(context.Background(), 1, task.TaskEdit{Notes: &notes}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.reload(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // labels lists the rows as "kind:title" for comparing tree shapes.
 func labels(m *model) []string {
@@ -556,7 +569,7 @@ func TestDeadlineView(t *testing.T) {
 		t.Fatal("a did not open the form in the deadline view")
 	}
 	typeText(m, "sooner")
-	press(m, "enter", "enter", "enter", "enter")
+	press(m, "enter", "enter", "enter", "enter", "enter") // due, issue, notes, project, submit
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("form: mode=%v err=%v", m.mode, m.err)
 	}
@@ -662,7 +675,7 @@ func TestDeadlineFold(t *testing.T) {
 	press(m, "G", "e") // email accountant: give it a date within the week
 	press(m, "enter")
 	typeText(m, "tomorrow")
-	press(m, "enter", "enter", "enter", "enter")
+	press(m, "enter", "enter", "enter", "enter", "enter") // issue, notes, status, project, submit
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("form: mode=%v err=%v", m.mode, m.err)
 	}
@@ -826,14 +839,30 @@ func TestAddTaskViaForm(t *testing.T) {
 		press(m, "backspace")
 	}
 	typeText(m, "owner/repo#42")
-	press(m, "enter") // issue -> project (prefilled: work)
+	press(m, "enter") // issue -> notes
+	if !strings.Contains(plain(m), "ctrl+j new line in notes") {
+		t.Errorf("task form help line:\n%s", plain(m))
+	}
+	typeText(m, "ask for the PO number")
+	press(m, "ctrl+j") // a new line, not the next field
+	typeText(m, "then send")
+	press(m, "enter") // notes -> project (prefilled: work)
 	press(m, "enter") // submit
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("form did not close cleanly: mode=%v err=%v", m.mode, m.err)
 	}
 	tasks, _ := store.ListTasks(context.Background(), task.TaskFilter{ProjectID: 2})
-	if len(tasks) != 2 || tasks[1].Title != "send invoice" || tasks[1].Due != "2026-09-18" || tasks[1].Issue != "https://github.com/owner/repo/issues/42" {
+	if len(tasks) != 2 || tasks[1].Title != "send invoice" || tasks[1].Due != "2026-09-18" || tasks[1].Issue != "https://github.com/owner/repo/issues/42" || tasks[1].Notes != "ask for the PO number\nthen send" {
 		t.Errorf("saved task: %+v", tasks)
+	}
+	// The row marks that there are notes; the detail pane shows them
+	// under their heading.
+	if !strings.Contains(plain(m), "send invoice") || !strings.Contains(plain(m), "≡  2026-09-18") {
+		t.Errorf("row not marked:\n%s", plain(m))
+	}
+	detail := ansi.Strip(m.viewDetail(40))
+	if i := strings.Index(detail, "\nnotes\n"); i < 0 || !strings.HasPrefix(detail[i+len("\nnotes\n"):], "ask for the PO number ") || !strings.Contains(detail[i:], "\nthen send ") {
+		t.Errorf("detail pane missing the notes:\n%s", detail)
 	}
 	if r, _ := m.selected(); r.target() != (target{rowTask, tasks[1].ID}) {
 		t.Errorf("cursor not on the new task: %v", r.target())
@@ -875,7 +904,7 @@ func TestFormStaysOpenWhenSaveFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	typeText(m, " again")
-	press(m, "enter", "enter", "enter", "enter", "enter")
+	press(m, "enter", "enter", "enter", "enter", "enter", "enter") // due, issue, notes, status, project, submit
 	if m.mode != modeForm || m.err == nil {
 		t.Fatalf("failed save: mode=%v err=%v", m.mode, m.err)
 	}
@@ -1048,8 +1077,8 @@ func TestDeadlineViewRowStyling(t *testing.T) {
 func TestCopyTaskViaForm(t *testing.T) {
 	m, store := setup(t, nil)
 	ctx := context.Background()
-	issue := "owner/repo#1"
-	if _, err := store.UpdateTask(ctx, 1, task.TaskEdit{Issue: &issue}); err != nil {
+	issue, notes := "owner/repo#1", "two coats"
+	if _, err := store.UpdateTask(ctx, 1, task.TaskEdit{Issue: &issue, Notes: &notes}); err != nil {
 		t.Fatal(err)
 	}
 	press(m, "r")
@@ -1066,7 +1095,7 @@ func TestCopyTaskViaForm(t *testing.T) {
 	}
 	tf, ok := m.form.(*taskForm)
 	// The original's issue is not the copy's: the field starts blank.
-	if !ok || tf.copyFrom != 1 || tf.title != "paint the hall" || tf.due != "2026-09-10" || tf.issue != "" || tf.project != 1 {
+	if !ok || tf.copyFrom != 1 || tf.title != "paint the hall" || tf.due != "2026-09-10" || tf.issue != "" || tf.notes != "two coats" || tf.project != 1 {
 		t.Fatalf("copy form not filled in: %+v", m.form)
 	}
 	typeText(m, " upstairs")
@@ -1076,7 +1105,8 @@ func TestCopyTaskViaForm(t *testing.T) {
 	}
 	typeText(m, "tomorrow")
 	press(m, "enter")      // due -> issue (blank)
-	press(m, "enter")      // issue -> project
+	press(m, "enter")      // issue -> notes (the original's)
+	press(m, "enter")      // notes -> project
 	press(m, "j", "enter") // house -> work, submit
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("form: mode=%v err=%v", m.mode, m.err)
@@ -1106,7 +1136,7 @@ func TestCopyTaskViaForm(t *testing.T) {
 	if !strings.Contains(plain(m), "copied from #3\n") && !strings.Contains(plain(m), "copied from #3 ") {
 		t.Errorf("copy form title for a task with no subtasks:\n%s", plain(m))
 	}
-	press(m, "enter", "enter", "enter", "enter")
+	press(m, "enter", "enter", "enter", "enter", "enter") // due, issue, notes, project, submit
 	if m.mode != modeBrowse || m.err != nil || m.status != "copied task #3 to task #5" {
 		t.Errorf("plain copy: mode=%v err=%v status=%q", m.mode, m.err, m.status)
 	}
@@ -1114,6 +1144,7 @@ func TestCopyTaskViaForm(t *testing.T) {
 
 func TestEditTaskViaForm(t *testing.T) {
 	m, store := setup(t, nil)
+	withNotes(t, m, store)
 	press(m, "j", "e")
 	if m.mode != modeForm {
 		t.Fatal("e did not open the form")
@@ -1125,18 +1156,50 @@ func TestEditTaskViaForm(t *testing.T) {
 	}
 	press(m, "enter") // due (blank) -> issue
 	typeText(m, "https://github.com/owner/repo/pull/7")
-	press(m, "enter")      // issue -> status
+	press(m, "enter") // issue -> notes (prefilled)
+	if tf, ok := m.form.(*taskForm); !ok || tf.notes != "two coats" {
+		t.Fatalf("notes not prefilled: %+v", m.form)
+	}
+	typeText(m, ", white")
+	press(m, "enter")      // notes -> status
 	press(m, "j", "enter") // todo -> doing, -> project
 	press(m, "j", "enter") // house -> work, submit
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("form: mode=%v err=%v", m.mode, m.err)
 	}
 	tk, _ := store.GetTask(context.Background(), 1)
-	if tk.Title != "paint the hall today" || tk.Due != "" || tk.Issue != "https://github.com/owner/repo/pull/7" || tk.Status != task.Doing || tk.ProjectID != 2 {
+	if tk.Title != "paint the hall today" || tk.Due != "" || tk.Issue != "https://github.com/owner/repo/pull/7" || tk.Notes != "two coats, white" || tk.Status != task.Doing || tk.ProjectID != 2 {
 		t.Errorf("edited task: %+v", tk)
+	}
+	// The notes come after the subtasks in the detail pane.
+	detail := ansi.Strip(m.viewDetail(40))
+	if i := strings.Index(detail, "\nnotes\n"); i < 0 || strings.Index(detail, "move furniture") > i {
+		t.Errorf("detail pane order:\n%s", detail)
 	}
 	if got := labels(m); !reflect.DeepEqual(got, []string{"P:house", "T:fix the gate", "P:work", "T:paint the hall today", "S:buy paint", "S:move furniture", "T:email accountant"}) {
 		t.Errorf("rows after move: %v", got)
+	}
+}
+
+// TestLongDetailIsCutWithAMark checks that a task whose checklist fills
+// the detail pane shows that its notes were cut, rather than dropping
+// them without a word.
+func TestLongDetailIsCutWithAMark(t *testing.T) {
+	m, store := setup(t, nil)
+	withNotes(t, m, store)
+	for i := range 20 {
+		if _, err := store.AddSubtask(context.Background(), 1, fmt.Sprintf("step %d", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	press(m, "r", "j")
+	deliver(m, tea.WindowSizeMsg{Width: 100, Height: 20})
+	page := plain(m)
+	if strings.Contains(page, "two coats") || !strings.Contains(page, "…") {
+		t.Errorf("cut notes not marked:\n%s", page)
+	}
+	if h := lipgloss.Height(page); h > 20 {
+		t.Errorf("view is %d lines tall for a 20-line terminal", h)
 	}
 }
 
@@ -1185,7 +1248,7 @@ func TestUnrecognisedIssue(t *testing.T) {
 
 	press(m, "e")
 	typeText(m, " today")
-	press(m, "enter", "enter", "enter", "enter", "enter") // title, due, issue, status, project
+	press(m, "enter", "enter", "enter", "enter", "enter", "enter") // title, due, issue, notes, status, project
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("form: mode=%v err=%v", m.mode, m.err)
 	}
@@ -1202,6 +1265,9 @@ func TestSubtaskForms(t *testing.T) {
 		t.Errorf("s on project: mode=%v status=%q", m.mode, m.status)
 	}
 	press(m, "j", "j", "s") // on a subtask: adds a sibling under the same task
+	if help := m.helpLine(); strings.Contains(help, "ctrl+j") || !strings.Contains(help, "enter save") {
+		t.Errorf("subtask form help = %q", help)
+	}
 	typeText(m, "wash brushes")
 	press(m, "enter")
 	if m.mode != modeBrowse || m.err != nil {
@@ -1444,7 +1510,7 @@ func TestCollapse(t *testing.T) {
 	// Adding a task to a collapsed project shows it again.
 	press(m, "a")
 	typeText(m, "send invoice")
-	press(m, "enter", "enter", "enter", "enter") // title -> due -> issue -> project -> submit
+	press(m, "enter", "enter", "enter", "enter", "enter") // title -> due -> issue -> notes -> project -> submit
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("task form: mode=%v err=%v", m.mode, m.err)
 	}

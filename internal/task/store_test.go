@@ -139,12 +139,16 @@ func TestTaskLifecycle(t *testing.T) {
 	s := open(t)
 	p := addProject(t, s, NewProject{Name: "house"})
 	other := addProject(t, s, NewProject{Name: "work"})
-	task, err := s.AddTask(ctx, NewTask{ProjectID: p.ID, Title: " paint the hall ", Due: "2026-10-01"})
+	task, err := s.AddTask(ctx, NewTask{ProjectID: p.ID, Title: " paint the hall ", Due: "2026-10-01", Notes: "\n\n  two coats\nwhite  \n\n"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if task.ID != 1 || task.ProjectID != p.ID || task.Title != "paint the hall" || task.Status != Todo || task.Due != "2026-10-01" {
 		t.Errorf("added task = %+v", task)
+	}
+	// Blank lines at either end go; a leading indent and inner lines stay.
+	if task.Notes != "  two coats\nwhite" {
+		t.Errorf("notes = %q", task.Notes)
 	}
 	if _, err := s.AddTask(ctx, NewTask{ProjectID: p.ID, Title: ""}); err == nil {
 		t.Error("blank title accepted")
@@ -161,8 +165,16 @@ func TestTaskLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.Title != "paint the hallway" || task.Due != "" || task.Status != Doing || task.ProjectID != other.ID {
+	if task.Title != "paint the hallway" || task.Due != "" || task.Status != Doing || task.ProjectID != other.ID || task.Notes != "  two coats\nwhite" {
 		t.Errorf("updated task = %+v", task)
+	}
+	notes := "one coat\n"
+	if task, err = s.UpdateTask(ctx, task.ID, TaskEdit{Notes: &notes}); err != nil || task.Notes != "one coat" || task.Title != "paint the hallway" {
+		t.Errorf("notes edit = %+v, %v", task, err)
+	}
+	none := "\n  \n"
+	if task, err = s.UpdateTask(ctx, task.ID, TaskEdit{Notes: &none}); err != nil || task.Notes != "" {
+		t.Errorf("clearing the notes = %+v, %v", task, err)
 	}
 	blocked := Status("blocked")
 	if _, err := s.UpdateTask(ctx, task.ID, TaskEdit{Status: &blocked}); err == nil {
@@ -235,18 +247,19 @@ func TestCopyTask(t *testing.T) {
 	s := open(t)
 	house := addProject(t, s, NewProject{Name: "house"})
 	work := addProject(t, s, NewProject{Name: "work"})
-	orig := addTask(t, s, NewTask{ProjectID: house.ID, Title: "paint the hall", Due: "2026-10-01"})
+	orig := addTask(t, s, NewTask{ProjectID: house.ID, Title: "paint the hall", Due: "2026-10-01", Notes: "two coats"})
 	buy := addSubtask(t, s, orig.ID, "buy paint")
 	addSubtask(t, s, orig.ID, "move furniture")
 	check(t, s.TickSubtask(ctx, buy.ID, true))
 	check(t, s.MarkTask(ctx, orig.ID, Doing))
 
-	// A plain copy: same title, due and project, todo, subtasks unticked.
+	// A plain copy: same title, due, notes and project, todo, subtasks
+	// unticked.
 	got, err := s.CopyTask(ctx, orig.ID, TaskEdit{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Task.ID == orig.ID || got.Task.Title != "paint the hall" || got.Task.Due != "2026-10-01" || got.Task.ProjectID != house.ID || got.Task.Status != Todo {
+	if got.Task.ID == orig.ID || got.Task.Title != "paint the hall" || got.Task.Due != "2026-10-01" || got.Task.Notes != "two coats" || got.Task.ProjectID != house.ID || got.Task.Status != Todo {
 		t.Errorf("copy = %+v", got.Task)
 	}
 	if len(got.Subtasks) != 2 || got.Subtasks[0].Title != "buy paint" || got.Subtasks[0].Done || got.Subtasks[1].Title != "move furniture" || got.Subtasks[0].TaskID != got.Task.ID {
@@ -260,12 +273,12 @@ func TestCopyTask(t *testing.T) {
 	}
 
 	// Overrides replace the copied fields.
-	title, due := " paint the landing ", "none"
-	got, err = s.CopyTask(ctx, orig.ID, TaskEdit{Title: &title, Due: &due, ProjectID: &work.ID})
+	title, due, notes := " paint the landing ", "none", "\none coat\n\n"
+	got, err = s.CopyTask(ctx, orig.ID, TaskEdit{Title: &title, Due: &due, Notes: &notes, ProjectID: &work.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Task.Title != "paint the landing" || got.Task.Due != "" || got.Task.ProjectID != work.ID {
+	if got.Task.Title != "paint the landing" || got.Task.Due != "" || got.Task.Notes != "one coat" || got.Task.ProjectID != work.ID {
 		t.Errorf("copy with overrides = %+v", got.Task)
 	}
 	blank, bad, missing := "  ", "soon", int64(99)
@@ -464,6 +477,42 @@ func TestMigrateAddsIssue(t *testing.T) {
 	link := "owner/repo#1"
 	if got, err := s.UpdateTask(ctx, 1, TaskEdit{Issue: &link}); err != nil || got.Issue != "https://github.com/owner/repo/issues/1" {
 		t.Errorf("setting an issue after migration: %+v, %v", got, err)
+	}
+}
+
+// TestMigrateAddsNotes opens a database made before tasks had notes and
+// checks the column is added with every task left without any.
+func TestMigrateAddsNotes(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := strings.Replace(schema, "\tnotes      TEXT NOT NULL DEFAULT '',\n", "", 1)
+	if old == schema {
+		t.Fatal("schema no longer has the notes line this test removes")
+	}
+	if _, err := db.Exec(old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO projects (id, name, created_at) VALUES (1, 'p', '');
+		INSERT INTO tasks (id, project_id, title, created_at) VALUES (1, 1, 'old one', '')`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	got, err := s.GetTask(ctx, 1)
+	if err != nil || got.Title != "old one" || got.Notes != "" {
+		t.Errorf("task after migration = %+v, %v", got, err)
+	}
+	notes := "two coats"
+	if got, err := s.UpdateTask(ctx, 1, TaskEdit{Notes: &notes}); err != nil || got.Notes != "two coats" {
+		t.Errorf("setting notes after migration: %+v, %v", got, err)
 	}
 }
 

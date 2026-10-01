@@ -181,7 +181,7 @@ func TestTaskLifecycle(t *testing.T) {
 	r := newRunner(t)
 	r.run("", false, "project", "add", "house")
 	r.run("", false, "project", "add", "work")
-	out := r.run("", false, "task", "add", "paint the hall", "--project", "1", "--due", "2026-10-01")
+	out := r.run("", false, "task", "add", "paint the hall", "--project", "1", "--due", "2026-10-01", "--notes", "two coats\nwhite\n")
 	if !strings.Contains(out, "added task 1: paint the hall (project 1)") {
 		t.Fatalf("add: %q", out)
 	}
@@ -206,7 +206,7 @@ func TestTaskLifecycle(t *testing.T) {
 		}
 	}
 	out = r.run("", false, "task", "show", "1")
-	for _, want := range []string{"#1  paint the hall", "project: #1 house", "status:  todo", "due:     2026-10-01"} {
+	for _, want := range []string{"#1  paint the hall", "project: #1 house", "status:  todo", "due:     2026-10-01", "notes:\n  two coats\n  white\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("show missing %q:\n%s", want, out)
 		}
@@ -216,12 +216,28 @@ func TestTaskLifecycle(t *testing.T) {
 	if msg := r.run("", true, "task", "edit", "1", "--due", "today", "--no-due"); !strings.Contains(msg, "cannot both") {
 		t.Errorf("edit with both due flags: %q", msg)
 	}
+	if msg := r.run("", true, "task", "edit", "1", "--notes", "x", "--no-notes"); !strings.Contains(msg, "notes") || !strings.Contains(msg, "no-notes") {
+		t.Errorf("edit with both notes flags: %q", msg)
+	}
 	if msg := r.run("", true, "task", "edit", "1"); !strings.Contains(msg, "nothing to change") {
 		t.Errorf("edit with no flags: %q", msg)
 	}
 	var node task.TaskNode
-	if err := json.Unmarshal([]byte(r.run("", false, "task", "show", "1", "--json")), &node); err != nil || node.Task.Title != "paint the hallway" || node.Task.Due != "" || node.Task.ProjectID != 2 || len(node.Subtasks) != 0 {
+	if err := json.Unmarshal([]byte(r.run("", false, "task", "show", "1", "--json")), &node); err != nil || node.Task.Title != "paint the hallway" || node.Task.Due != "" || node.Task.ProjectID != 2 || node.Task.Notes != "two coats\nwhite" || len(node.Subtasks) != 0 {
 		t.Errorf("after edit: %+v, %v", node, err)
+	}
+	r.run("", false, "task", "edit", "1", "--notes", "one coat")
+	var noted task.TaskNode
+	if err := json.Unmarshal([]byte(r.run("", false, "task", "show", "1", "--json")), &noted); err != nil || noted.Task.Notes != "one coat" {
+		t.Errorf("after --notes: %+v, %v", noted, err)
+	}
+	r.run("", false, "task", "edit", "1", "--no-notes")
+	var cleared task.TaskNode
+	if err := json.Unmarshal([]byte(r.run("", false, "task", "show", "1", "--json")), &cleared); err != nil || cleared.Task.Notes != "" {
+		t.Errorf("after --no-notes: %+v, %v", cleared, err)
+	}
+	if out := r.run("", false, "task", "show", "1"); strings.Contains(out, "notes:") {
+		t.Errorf("show prints a notes heading with none:\n%s", out)
 	}
 
 	r.run("", false, "task", "mark", "1", "doing")
@@ -288,7 +304,7 @@ func TestCopyTask(t *testing.T) {
 	r := newRunner(t)
 	r.run("", false, "project", "add", "house")
 	r.run("", false, "project", "add", "work")
-	r.run("", false, "task", "add", "paint the hall", "--project", "1", "--due", "2026-10-01")
+	r.run("", false, "task", "add", "paint the hall", "--project", "1", "--due", "2026-10-01", "--notes", "two coats")
 	r.run("", false, "subtask", "add", "1", "buy paint")
 	r.run("", false, "subtask", "add", "1", "move furniture")
 	r.run("", false, "subtask", "tick", "1")
@@ -297,16 +313,23 @@ func TestCopyTask(t *testing.T) {
 		t.Errorf("copy: %q", out)
 	}
 	var node task.TaskNode
-	if err := json.Unmarshal([]byte(r.run("", false, "task", "show", "2", "--json")), &node); err != nil || node.Task.Due != "2026-10-01" || node.Task.Status != task.Todo || len(node.Subtasks) != 2 || node.Subtasks[0].Done {
+	if err := json.Unmarshal([]byte(r.run("", false, "task", "show", "2", "--json")), &node); err != nil || node.Task.Due != "2026-10-01" || node.Task.Notes != "two coats" || node.Task.Status != task.Todo || len(node.Subtasks) != 2 || node.Subtasks[0].Done {
 		t.Errorf("the copy: %+v, %v", node, err)
 	}
 	// A fresh value each time: an omitted field would keep the old one.
 	var flagged task.TaskNode
-	if err := json.Unmarshal([]byte(r.run("", false, "task", "copy", "1", "--title", "paint the landing", "--no-due", "--project", "2", "--json")), &flagged); err != nil || flagged.Task.ID != 3 || flagged.Task.Title != "paint the landing" || flagged.Task.Due != "" || flagged.Task.ProjectID != 2 || len(flagged.Subtasks) != 2 {
+	if err := json.Unmarshal([]byte(r.run("", false, "task", "copy", "1", "--title", "paint the landing", "--no-due", "--notes", "one coat", "--project", "2", "--json")), &flagged); err != nil || flagged.Task.ID != 3 || flagged.Task.Title != "paint the landing" || flagged.Task.Due != "" || flagged.Task.Notes != "one coat" || flagged.Task.ProjectID != 2 || len(flagged.Subtasks) != 2 {
 		t.Errorf("copy with flags --json: %+v, %v", flagged, err)
+	}
+	var unnoted task.TaskNode
+	if err := json.Unmarshal([]byte(r.run("", false, "task", "copy", "1", "--no-notes", "--json")), &unnoted); err != nil || unnoted.Task.ID != 4 || unnoted.Task.Notes != "" {
+		t.Errorf("copy with --no-notes: %+v, %v", unnoted, err)
 	}
 	if msg := r.run("", true, "task", "copy", "1", "--due", "today", "--no-due"); !strings.Contains(msg, "cannot both") {
 		t.Errorf("copy with both due flags: %q", msg)
+	}
+	if msg := r.run("", true, "task", "copy", "1", "--notes", "x", "--no-notes"); !strings.Contains(msg, "notes") || !strings.Contains(msg, "no-notes") {
+		t.Errorf("copy with both notes flags: %q", msg)
 	}
 	if msg := r.run("", true, "task", "copy", "9"); !strings.Contains(msg, "task 9: not found") {
 		t.Errorf("copy of a missing task: %q", msg)
