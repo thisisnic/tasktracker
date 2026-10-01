@@ -24,7 +24,7 @@ func runTUI(cmd *cobra.Command, dbPath, cfgPath string) error {
 		return err
 	}
 	defer store.Close()
-	changed, err := tui.Run(cmd.Context(), store, tui.Options{Goals: goals})
+	changed, err := tui.Run(cmd.Context(), store, tui.Options{Goals: goals, Folds: tui.FoldsPath(dbPath)})
 	if err != nil {
 		return err
 	}

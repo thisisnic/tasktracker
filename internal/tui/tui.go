@@ -11,6 +11,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -32,6 +33,9 @@ type Options struct {
 	// ShowFinished starts with archived tasks and finished projects
 	// visible.
 	ShowFinished bool
+	// Folds is the file the folds are kept in between sessions, as
+	// FoldsPath gives it. Empty means folds last only until the UI quits.
+	Folds string
 }
 
 // Run opens the by-project view and blocks until the user quits. It
@@ -41,6 +45,11 @@ type Options struct {
 func Run(ctx context.Context, store *task.Store, opts Options) (changed bool, err error) {
 	m := newModel(ctx, store, opts.Goals)
 	m.showAll = opts.ShowFinished
+	m.foldsPath = opts.Folds
+	// A folds file that cannot be read is not worth keeping the UI shut
+	// for: what could be read is used, and the trouble is on the status
+	// line until a key is pressed.
+	m.err = m.loadFolds()
 	if err := m.reload(); err != nil {
 		return false, err
 	}
@@ -223,8 +232,16 @@ type model struct {
 	loadedOnce bool     // loaded holds a reading, so a different one is a change from elsewhere
 	unnoted    bool     // a reload took in a change from elsewhere that the status line has not yet said
 	// collapsed holds the areas and projects whose contents are hidden in
-	// the tree. It is kept across reloads, so a fold survives edits.
+	// the tree. It is kept across reloads, so a fold survives edits, and
+	// in the file at foldsPath, when there is one, so it survives quitting.
 	collapsed map[target]bool
+	// foldMade is the stamp of the folded row's creation, for the folds
+	// file: SQLite gives a deleted row's id to the next row made, so a
+	// kept fold is matched by stamp as well as id. Every area and project
+	// in collapsed has an entry here.
+	foldMade  map[target]string
+	foldsPath string
+	foldsErr  error // the last save of the folds failed; shown until a key or a save that works
 
 	// goal labels for the selected project, looked up once per project id
 	goalLabels map[int64][]goallink.Goal
@@ -238,7 +255,7 @@ type model struct {
 }
 
 func newModel(ctx context.Context, store *task.Store, goals *goallink.Reader) *model {
-	return &model{ctx: ctx, store: store, goals: goals, now: time.Now, width: 100, height: 30, goalLabels: map[int64][]goallink.Goal{}, collapsed: map[target]bool{}}
+	return &model{ctx: ctx, store: store, goals: goals, now: time.Now, width: 100, height: 30, goalLabels: map[int64][]goallink.Goal{}, collapsed: map[target]bool{}, foldMade: map[target]string{}}
 }
 
 // afterWrite is reload for after a store write: it also notes that the
@@ -319,8 +336,56 @@ func (m *model) stepToTask(dir int) bool {
 	return false
 }
 
+// loadFolds reads the folds kept from the last session, when there is a
+// file for them. Folds on rows that have since gone are dropped by the
+// reload that follows. A file that could not be read through may hold
+// folds that were not seen, and a save would write over them, so folds
+// are then not saved for the rest of the session; lines that were not
+// folds have been skipped, and the rest are kept as usual.
+func (m *model) loadFolds() error {
+	if m.foldsPath == "" {
+		return nil
+	}
+	folds, err := loadFolds(m.foldsPath)
+	m.collapsed, m.foldMade = map[target]bool{}, folds
+	for t := range folds {
+		m.collapsed[t] = true
+	}
+	var bad *badLinesError
+	if err != nil && !errors.As(err, &bad) {
+		m.foldsPath = ""
+		err = fmt.Errorf("%w; folds are not saved this session", err)
+	}
+	return err
+}
+
+// unfold forgets a fold.
+func (m *model) unfold(t target) {
+	delete(m.collapsed, t)
+	delete(m.foldMade, t)
+}
+
+// saveFolds writes the folds for the next session, when there is a file
+// for them. It is called wherever collapsed changes, which includes a
+// prune inside reload, so a failure is kept in its own field rather
+// than err, which every caller of reload sets afterwards. It is shown
+// until a key clears it, since the next session would open with the
+// folds as they were.
+func (m *model) saveFolds() {
+	if m.foldsPath == "" {
+		return
+	}
+	folds := map[target]string{}
+	for t := range m.collapsed {
+		folds[t] = m.foldMade[t]
+	}
+	m.foldsErr = saveFolds(m.foldsPath, folds)
+}
+
 // pruneFolds forgets folds on areas and projects that have been deleted,
-// so a deleted row's fold cannot land on whatever next reuses its id. It
+// so a deleted row's fold cannot land on whatever next reuses its id: a
+// row is gone when nothing has its id, or when what has it was made at
+// another time, as after a delete and an add between sessions. It
 // checks every project, not just the ones in the outline: a finished
 // project hidden by f still exists, and keeps its fold for when it shows
 // again.
@@ -332,17 +397,25 @@ func (m *model) pruneFolds() error {
 	if err != nil {
 		return err
 	}
-	present := map[target]bool{}
+	present := map[target]string{}
 	for _, a := range m.areas {
-		present[target{rowArea, a.ID}] = true
+		present[target{rowArea, a.ID}] = stamp(a.CreatedAt)
 	}
 	for _, p := range projects {
-		present[target{rowProject, p.ID}] = true
+		present[target{rowProject, p.ID}] = stamp(p.CreatedAt)
 	}
+	pruned := false
 	for t := range m.collapsed {
-		if t.kind != rowHeading && !present[t] {
-			delete(m.collapsed, t)
+		if t.kind == rowHeading {
+			continue
 		}
+		if now, here := present[t]; !here || m.foldMade[t] != now {
+			m.unfold(t)
+			pruned = true
+		}
+	}
+	if pruned {
+		m.saveFolds()
 	}
 	return nil
 }
@@ -706,7 +779,7 @@ func (t target) label() string {
 }
 
 func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	m.status, m.err, m.pollErr = "", nil, false
+	m.status, m.err, m.pollErr, m.foldsErr = "", nil, false, nil
 	switch msg.String() {
 	case "q", "ctrl+c", "esc":
 		return m, tea.Quit
@@ -1003,13 +1076,14 @@ func (m *model) toggleFold() {
 	}
 	var (
 		t     target
+		made  string // when the folded row was made, for the folds file
 		name  string
 		held  string // what folding hides, for the status line
 		empty string // why there is nothing to hide, or "" when there is
 	)
 	switch {
 	case r.kind == rowArea:
-		t, name, held = r.target(), r.area.Area.Name, "what is in it"
+		t, made, name, held = r.target(), stamp(r.area.Area.CreatedAt), r.area.Area.Name, "what is in it"
 		if len(r.area.Areas)+len(r.area.Projects) == 0 {
 			empty = "the area is empty"
 		}
@@ -1018,7 +1092,7 @@ func (m *model) toggleFold() {
 	case m.view == viewDeadline:
 		t, name, held = m.headingOf(r), bucketOf(r.task.Task.Due, m.now()).String(), "its tasks"
 	default:
-		t, name, held = target{rowProject, r.project.Project.ID}, r.project.Project.Name, "its tasks"
+		t, made, name, held = target{rowProject, r.project.Project.ID}, stamp(r.project.Project.CreatedAt), r.project.Project.Name, "its tasks"
 		if len(r.project.Tasks) == 0 {
 			empty = "the project has no tasks listed"
 		}
@@ -1027,15 +1101,17 @@ func (m *model) toggleFold() {
 	case m.collapsed[t] && r.target() == t:
 		// Unfold before asking whether there is anything to hide, so a fold
 		// whose contents have since gone can still be undone.
-		delete(m.collapsed, t)
+		m.unfold(t)
 		m.status = "expanded " + name
 	case empty != "":
 		m.status = "nothing to hide: " + empty
 		return
 	default:
 		m.collapsed[t] = true
+		m.foldMade[t] = made
 		m.status = "collapsed " + name + "; ← shows " + held + " again"
 	}
+	m.saveFolds()
 	m.rebuildRows()
 	m.selectTarget(t)
 }
@@ -1056,11 +1132,12 @@ func (m *model) reveal(t target) {
 	changed := false
 	for _, c := range around {
 		if m.collapsed[c] {
-			delete(m.collapsed, c)
+			m.unfold(c)
 			changed = true
 		}
 	}
 	if changed {
+		m.saveFolds()
 		m.rebuildRows()
 	}
 	m.selectTarget(t)
@@ -1707,6 +1784,14 @@ func (m *model) viewStatus() string {
 	switch {
 	case m.err != nil:
 		return errStyle.Render("error: " + m.err.Error())
+	case m.foldsErr != nil && m.mode == modeBrowse:
+		// The action itself went well, so its message stays, with the
+		// folds trouble after it.
+		msg := errStyle.Render("error: " + m.foldsErr.Error())
+		if m.status != "" {
+			msg = m.status + "; " + msg
+		}
+		return msg
 	case m.mode == modeConfirmDelete:
 		r, _ := m.selected()
 		switch r.kind {

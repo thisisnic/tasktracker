@@ -50,8 +50,29 @@ folding: the left or right arrow on a project hides its tasks, and on an
 area hides everything in it, leaving the row with a `▸` and its open
 count. The same key shows them again. On a task or subtask it folds the
 project the row is in. The whole tree stays in view, so nothing is out of
-sight; only the detail is. Folds last for the session, and saving
-something inside a fold unfolds the way to it.
+sight; only the detail is. Saving something inside a fold unfolds the
+way to it.
+
+Folds are kept between sessions. They are the owner's arrangement of the
+tree, and opening the app to find it all unfolded again made the folds
+not worth making. They live in a small file beside the database, one
+fold per line, rather than in the database itself: they are state of
+this screen on this machine, not data, so they stay out of the backup
+and out of the CLI's view, and a fold does not count as a change for
+the backup on quit. A file beside the database, like SQLite's own -wal
+and -shm files, means a scratch database has its own folds. The file is
+rewritten on every fold and unfold, so a session that ends without a
+clean quit still keeps them. A fold on something since deleted is
+dropped the next time the tree is loaded, as it was within a session.
+Between sessions an id can come back: SQLite gives a deleted row's id to
+the next row made, so a kept fold also carries the stamp of the row's
+creation, and is dropped when the row with that id was made at another
+time. A row deleted and replaced within the same second keeps the old
+one's fold, which one key undoes. A line in the file that is not a fold
+is skipped and reported; the rest are still used. Two UIs open at once
+on the same database each write the file whole from their own folds,
+read once at the start, so the last UI to change a fold writes its set
+and the other UI's folds from that session are lost.
 
 ## Projects
 
@@ -171,8 +192,8 @@ Layout, to be adjusted as it gets used:
   and the project name after the title. The list is split under headings
   for how soon: overdue, the next 7 days (from today), the next 30,
   longer, and no deadline, each with a count and left out when empty. The
-  headings fold like areas do, with the same keys, and the folds last as
-  long as the others. Done and dropped tasks are not due any more and
+  headings fold like areas do, with the same keys, and the folds are
+  kept with the others. Done and dropped tasks are not due any more and
   are not what this view is for, so they are left out of it; the
   by-project view keeps them, greyed, until archived. One key switches
   between the two views, so the tree answers "what is there to do on

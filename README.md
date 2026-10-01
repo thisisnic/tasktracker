@@ -92,8 +92,8 @@ tasktracker task list --due --json
   dates. Deleting one moves what was in it up a level.
 - **Folding** - `←` or `→` on a project hides its tasks, on an area
   hides everything in it, and by deadline hides a heading's tasks, behind
-  a `▸` that keeps the count; press it again to show them. Folds last
-  until you quit.
+  a `▸` that keeps the count; press it again to show them. Folds are
+  kept between sessions, in a small file next to the database.
 - **By project or by deadline** - The tree groups tasks under their
   projects. Press `v` for the open tasks as one list under the headings
   Overdue, Next 7 days, Next 30 days, Longer and No deadline, soonest
@@ -129,8 +129,9 @@ tasktracker task list --due --json
   second tasktracker in another terminal, and reloads when one has. A
   form or a confirmation that is open is left alone until it closes.
 - **Local and portable** - A single static binary and a single SQLite file
-  at `~/.local/share/tasktracker/tasktracker.db` (or under `$XDG_DATA_HOME`).
-  Point elsewhere with `--db` or `TASKTRACKER_DB`.
+  at `~/.local/share/tasktracker/tasktracker.db` (or under `$XDG_DATA_HOME`),
+  with the UI's folds in `tasktracker.db-folds` beside it. Point elsewhere
+  with `--db` or `TASKTRACKER_DB`.
 - **Self-updating** - `tasktracker update` fetches the latest release,
   verifies it against the published checksums, and swaps the binary in place.
 

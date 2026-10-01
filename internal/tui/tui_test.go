@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -205,6 +207,18 @@ func typeText(m *model, s string) {
 // plain renders the view without escape codes, so text split by styling
 // can be matched as one string.
 func plain(m *model) string { return ansi.Strip(m.View().Content) }
+
+// foldProject folds project id as toggleFold would, with the stamp of its
+// creation, without moving the cursor.
+func foldProject(t *testing.T, m *model, store *task.Store, id int64) {
+	t.Helper()
+	p, err := store.GetProject(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.collapsed[target{rowProject, id}] = true
+	m.foldMade[target{rowProject, id}] = stamp(p.CreatedAt)
+}
 
 // withNotes puts notes on task #1, paint the hall, and reloads.
 func withNotes(t *testing.T, m *model, store *task.Store) {
@@ -571,7 +585,7 @@ func TestDeadlineView(t *testing.T) {
 		t.Errorf("after date changes: %v", got)
 	}
 	// Saving by deadline leaves the tree's folds alone: fold house first.
-	m.collapsed[target{rowProject, 1}] = true
+	foldProject(t, m, store, 1)
 	press(m, "G", "a") // a adds under the selected task's project
 	if m.mode != modeForm {
 		t.Fatal("a did not open the form in the deadline view")
@@ -655,7 +669,7 @@ func TestDeadlineFold(t *testing.T) {
 		t.Errorf("v from Overdue: %v", r.target())
 	}
 	press(m, "v")
-	m.collapsed[target{rowProject, 1}] = true
+	foldProject(t, m, store, 1)
 	press(m, "g", "v")
 	if r, _ := m.selected(); r.target() != (target{rowProject, 1}) {
 		t.Errorf("v from Overdue with its task folded away: %d %v", m.cursor, r.target())
@@ -1542,6 +1556,239 @@ func TestPollLandsByDeadline(t *testing.T) {
 	}
 	if r, _ := m.selected(); r.target() != (target{rowTask, 3}) {
 		t.Errorf("cursor after the delete: %v, want email accountant", r.target())
+	}
+}
+
+// TestFoldsPersist checks that folds are kept in the folds file as they
+// change, and come back when a new model loads them: a fold on an area,
+// a project and a by-deadline heading; a fold undone by reveal; a fold on
+// a deleted project dropped; and a file that cannot be read or written
+// reported without stopping anything.
+func TestFoldsPersist(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tasktracker.db")
+	folds := FoldsPath(path)
+	if folds != path+"-folds" {
+		t.Errorf("FoldsPath = %q", folds)
+	}
+	m, store := setupAt(t, nil, path)
+	ctx := context.Background()
+	garden, err := store.AddArea(ctx, task.NewArea{Name: "garden"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateProject(ctx, 1, task.ProjectEdit{AreaID: &garden.ID}); err != nil { // house
+		t.Fatal(err)
+	}
+	m.foldsPath = folds
+	if err := m.loadFolds(); err != nil {
+		t.Fatalf("no file yet: %v", err)
+	}
+	press(m, "r")
+	// Fold the area, the project work and the Overdue heading.
+	press(m, "g", "left")      // garden
+	press(m, "G", "left")      // email accountant: folds work
+	press(m, "v", "g", "left") // Overdue heading
+	if m.err != nil {
+		t.Fatal(m.err)
+	}
+	want := map[target]bool{{rowArea, garden.ID}: true, {rowProject, 2}: true, {rowHeading, int64(bucketOverdue)}: true}
+	if !reflect.DeepEqual(m.collapsed, want) {
+		t.Fatalf("collapsed = %v", m.collapsed)
+	}
+	// Each area or project fold carries the stamp of the row's creation.
+	work, err := store.GetProject(ctx, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gardenLine := "area 1 " + stamp(garden.CreatedAt) + "\n"
+	workLine := "project 2 " + stamp(work.CreatedAt) + "\n"
+	data, err := os.ReadFile(folds)
+	if err != nil || string(data) != gardenLine+"heading 1\n"+workLine {
+		t.Errorf("folds file = %q, %v", data, err)
+	}
+	info, err := os.Stat(folds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("folds file mode = %o", info.Mode().Perm())
+	}
+
+	// A fresh model with the same file opens with the same folds, and the
+	// rows reflect them.
+	again := newModel(ctx, store, nil)
+	again.now = m.now
+	again.foldsPath = folds
+	if err := again.loadFolds(); err != nil {
+		t.Fatal(err)
+	}
+	if err := again.reload(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(again.collapsed, want) {
+		t.Errorf("reloaded folds = %v", again.collapsed)
+	}
+	if got := labels(again); !reflect.DeepEqual(got, []string{"A:garden", "P:work"}) {
+		t.Errorf("rows with the kept folds: %v", got)
+	}
+
+	// Revealing a saved task unfolds its project, and that is kept too.
+	press(again, "G", "a")
+	typeText(again, "send invoice")
+	press(again, "enter", "enter", "enter", "enter", "enter")
+	if again.mode != modeBrowse || again.err != nil {
+		t.Fatalf("add under a folded project: mode=%v err=%v", again.mode, again.err)
+	}
+	if data, _ := os.ReadFile(folds); string(data) != gardenLine+"heading 1\n" {
+		t.Errorf("folds file after reveal = %q", data)
+	}
+
+	// A deleted area's fold is dropped from the file by the next reload.
+	if err := store.DeleteArea(ctx, garden.ID); err != nil {
+		t.Fatal(err)
+	}
+	press(again, "r")
+	if data, _ := os.ReadFile(folds); string(data) != "heading 1\n" {
+		t.Errorf("folds file after the area went = %q", data)
+	}
+
+	// A kept fold on a project whose id has since gone to another
+	// project is dropped: work is deleted and a new project takes id 2,
+	// made at another time.
+	press(again, "G", "left") // fold work again
+	if err := store.DeleteProject(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := store.AddProject(ctx, task.NewProject{Name: "shed"}); err != nil || p.ID != 2 {
+		t.Fatalf("new project did not take id 2: %+v, %v", p, err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE projects SET created_at = '2030-01-01T00:00:00Z' WHERE id = 2`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	fresh := newModel(ctx, store, nil)
+	fresh.foldsPath = folds
+	if err := fresh.loadFolds(); err != nil || !fresh.collapsed[target{rowProject, 2}] {
+		t.Fatalf("fold on the old id not read: %v, folds=%v", err, fresh.collapsed)
+	}
+	if err := fresh.reload(); err != nil {
+		t.Fatal(err)
+	}
+	if fresh.collapsed[target{rowProject, 2}] {
+		t.Error("the new project opened folded with the old one's fold")
+	}
+	if data, _ := os.ReadFile(folds); strings.Contains(string(data), "project 2") {
+		t.Errorf("folds file keeps the old project's fold: %q", data)
+	}
+
+	// A line that is not a fold is skipped and reported, and the rest of
+	// the file is still read; so is a heading that is not one of the
+	// buckets, or an area or project without its stamp. A missing file
+	// is no folds and no error.
+	if err := os.WriteFile(folds, []byte("project 1 2026-09-01T00:00:00Z\n\nproject one\nheading 1\nheading 9\narea 1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bad := newModel(ctx, store, nil)
+	bad.foldsPath = folds
+	err = bad.loadFolds()
+	if err == nil || !strings.Contains(err.Error(), "line 3") || !strings.Contains(err.Error(), "project one") || !strings.Contains(err.Error(), "2 more") {
+		t.Errorf("corrupt file: %v", err)
+	}
+	if !reflect.DeepEqual(bad.collapsed, map[target]bool{{rowProject, 1}: true, {rowHeading, 1}: true}) {
+		t.Errorf("folds read around the bad lines = %v", bad.collapsed)
+	}
+	// A file that cannot be read at all is reported, and nothing is saved
+	// over it for the rest of the session: its folds are still in there.
+	if runtime.GOOS != "windows" && os.Geteuid() != 0 {
+		kept, err := os.ReadFile(folds)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(folds, 0); err != nil {
+			t.Fatal(err)
+		}
+		shut := newModel(ctx, store, nil)
+		shut.foldsPath = folds
+		if err := shut.loadFolds(); err == nil || !strings.Contains(err.Error(), "not saved this session") || len(shut.collapsed) != 0 {
+			t.Errorf("unreadable file: %v, folds=%v", err, shut.collapsed)
+		}
+		if err := shut.reload(); err != nil {
+			t.Fatal(err)
+		}
+		press(shut, "left") // folds house
+		if !shut.collapsed[target{rowProject, 1}] || shut.foldsErr != nil {
+			t.Errorf("fold with an unreadable file: folds=%v err=%v", shut.collapsed, shut.foldsErr)
+		}
+		if err := os.Chmod(folds, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if now, _ := os.ReadFile(folds); string(now) != string(kept) {
+			t.Errorf("unreadable file was written over: %q", now)
+		}
+	}
+	if err := os.Remove(folds); err != nil {
+		t.Fatal(err)
+	}
+	if err := bad.loadFolds(); err != nil || len(bad.collapsed) != 0 {
+		t.Errorf("missing file: %v, folds=%v", err, bad.collapsed)
+	}
+
+	// A save that fails is shown, and the fold still happens; a key
+	// clears the message, and a save that works clears the trouble.
+	bad.foldsPath = filepath.Join(t.TempDir(), "gone", "folds")
+	if err := bad.reload(); err != nil {
+		t.Fatal(err)
+	}
+	press(bad, "left")
+	if bad.foldsErr == nil || !strings.Contains(bad.foldsErr.Error(), "folds") || len(bad.collapsed) != 1 || !strings.Contains(plain(bad), "error: folds") {
+		t.Errorf("failed save: foldsErr=%v folds=%v\n%s", bad.foldsErr, bad.collapsed, plain(bad))
+	}
+	press(bad, "j")
+	if bad.foldsErr != nil || strings.Contains(plain(bad), "error:") {
+		t.Errorf("key did not clear the folds error: %v", bad.foldsErr)
+	}
+	// The save that follows a prune fails the same way, and is shown even
+	// though reload itself went well: a deleted area's fold is pruned by
+	// the reload after r.
+	bad.collapsed[target{rowArea, 99}] = true
+	bad.foldMade[target{rowArea, 99}] = stamp(fixed)
+	press(bad, "r")
+	if bad.err != nil || bad.foldsErr == nil || bad.collapsed[target{rowArea, 99}] {
+		t.Errorf("failed save after a prune: err=%v foldsErr=%v folds=%v", bad.err, bad.foldsErr, bad.collapsed)
+	}
+	bad.foldsPath = folds
+	press(bad, "g", "left") // house, folded above: unfolds, which saves
+	if bad.foldsErr != nil || bad.collapsed[target{rowProject, 1}] {
+		t.Errorf("a save that works: err=%v folds=%v", bad.foldsErr, bad.collapsed)
+	}
+	// A save whose rename fails, here onto a directory in the way, is
+	// reported and leaves no temporary file behind.
+	inWay := filepath.Join(t.TempDir(), "folds")
+	if err := os.MkdirAll(filepath.Join(inWay, "x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	bad.foldsPath = inWay
+	press(bad, "left") // folds house again, which saves
+	if bad.foldsErr == nil || !bad.collapsed[target{rowProject, 1}] {
+		t.Errorf("rename onto a directory: err=%v folds=%v", bad.foldsErr, bad.collapsed)
+	}
+	entries, err := os.ReadDir(filepath.Dir(inWay))
+	if err != nil || len(entries) != 1 {
+		t.Errorf("after a failed rename, the directory holds %v, %v", entries, err)
+	}
+	// A save that fails inside the reload after an action keeps the
+	// action's message, with the folds error after it: here house, still
+	// folded, is deleted, and its fold is pruned.
+	press(bad, "d", "y")
+	if bad.err != nil || bad.collapsed[target{rowProject, 1}] {
+		t.Fatalf("delete of a folded project: err=%v folds=%v", bad.err, bad.collapsed)
+	}
+	if line := bad.viewStatus(); !strings.HasPrefix(ansi.Strip(line), "deleted project #1; error: folds: ") {
+		t.Errorf("status after the delete = %q", ansi.Strip(line))
 	}
 }
 
