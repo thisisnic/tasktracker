@@ -124,6 +124,10 @@ tasktracker task list --due --json
   when the UI exits after changing something.
 - **Agent friendly** - A plain CLI with JSON output, so a coding agent can
   read and update your tasks without touching the UI.
+- **Keeps up** - The UI checks every couple of seconds whether another
+  process has changed the database, such as an agent on the CLI or a
+  second tasktracker in another terminal, and reloads when one has. A
+  form or a confirmation that is open is left alone until it closes.
 - **Local and portable** - A single static binary and a single SQLite file
   at `~/.local/share/tasktracker/tasktracker.db` (or under `$XDG_DATA_HOME`).
   Point elsewhere with `--db` or `TASKTRACKER_DB`.

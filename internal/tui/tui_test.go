@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -32,7 +33,14 @@ var fixed = time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
 //	  email accountant
 func setup(t *testing.T, goals *goallink.Reader) (*model, *task.Store) {
 	t.Helper()
-	store, err := task.Open(filepath.Join(t.TempDir(), "tasktracker.db"))
+	return setupAt(t, goals, filepath.Join(t.TempDir(), "tasktracker.db"))
+}
+
+// setupAt is setup with the database at path, for a test that opens a
+// second connection to it as another process would.
+func setupAt(t *testing.T, goals *goallink.Reader, path string) (*model, *task.Store) {
+	t.Helper()
+	store, err := task.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1251,6 +1259,289 @@ func TestChangedTracksWrites(t *testing.T) {
 		if ok, status := after(keys...); !ok {
 			t.Errorf("%v did not mark the session changed: status=%q", keys, status)
 		}
+	}
+}
+
+// TestPollSeesChangesElsewhere checks that a change from another
+// connection is picked up on the next poll, counts as a change for the
+// backup on quit, keeps the cursor near where it was, and is left alone
+// while a form or a confirmation is open.
+func TestPollSeesChangesElsewhere(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tasktracker.db")
+	m, _ := setupAt(t, nil, path)
+	ctx := context.Background()
+	other, err := task.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	// Init starts the ticking, and each poll asks for the next.
+	if m.Init() == nil {
+		t.Error("Init did not start polling")
+	}
+	if _, cmd := m.Update(pollMsg{}); cmd == nil {
+		t.Error("a poll did not ask for the next one")
+	}
+	// Nothing changed: nothing happens.
+	press(m, "j")
+	m.status = "as it was"
+	deliver(m, pollMsg{})
+	if m.status != "as it was" || m.changed {
+		t.Errorf("poll with no change: status=%q changed=%v", m.status, m.changed)
+	}
+	// Own writes are not "elsewhere": the poll adds nothing to the status
+	// and the write counts as the UI's own.
+	press(m, "space")
+	m.changed = false
+	deliver(m, pollMsg{})
+	if m.status != "task #1 doing" || m.changed {
+		t.Errorf("poll after an own write: status=%q changed=%v", m.status, m.changed)
+	}
+	// A task added by another process shows up, with the cursor still on
+	// the same task.
+	if _, err := other.AddTask(ctx, task.NewTask{ProjectID: 1, Title: "clear the gutters"}); err != nil {
+		t.Fatal(err)
+	}
+	m.changed = false
+	deliver(m, pollMsg{})
+	if m.status != "task #1 doing; changed elsewhere, reloaded" || !m.changed || m.err != nil {
+		t.Errorf("poll after a change elsewhere: status=%q changed=%v err=%v", m.status, m.changed, m.err)
+	}
+	if got := labels(m); !reflect.DeepEqual(got, []string{"P:house", "T:paint the hall", "S:buy paint", "S:move furniture", "T:fix the gate", "T:clear the gutters", "P:work", "T:email accountant"}) {
+		t.Errorf("rows after the poll: %v", got)
+	}
+	if r, _ := m.selected(); r.target() != (target{rowTask, 1}) {
+		t.Errorf("cursor moved: %v", r.target())
+	}
+	// The selected task deleted elsewhere, subtasks and all: the cursor
+	// keeps its place, which is now the next task, as it does after d.
+	if err := other.DeleteTask(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	deliver(m, pollMsg{})
+	if r, _ := m.selected(); r.target() != (target{rowTask, 2}) || len(m.rows) != 5 {
+		t.Errorf("after the selected task went: cursor %v, %d rows", r.target(), len(m.rows))
+	}
+	// A reload for another reason, here r, also takes in, counts and
+	// notes a change from elsewhere, so a poll is not the only way to
+	// see one.
+	if _, err := other.AddTask(ctx, task.NewTask{ProjectID: 2, Title: "chase the invoice"}); err != nil {
+		t.Fatal(err)
+	}
+	m.changed = false
+	press(m, "r")
+	if !m.changed || m.status != "reloaded; changed elsewhere, reloaded" || len(m.rows) != 6 {
+		t.Errorf("r after a change elsewhere: changed=%v status=%q rows=%d", m.changed, m.status, len(m.rows))
+	}
+	if err := other.DeleteTask(ctx, 4); err != nil { // clear the gutters
+		t.Fatal(err)
+	}
+	m.changed = false
+	deliver(m, pollMsg{})
+	if !m.changed || len(m.rows) != 5 {
+		t.Errorf("poll after the delete: changed=%v rows=%d", m.changed, len(m.rows))
+	}
+	// A save reloads too, and the change that came in with it is noted
+	// after the save's own message.
+	press(m, "e") // fix the gate, where the cursor is
+	if _, err := other.AddTask(ctx, task.NewTask{ProjectID: 2, Title: "pay the bill"}); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "enter", "enter", "enter", "enter", "enter", "enter") // due, issue, notes, status, project, submit
+	if m.mode != modeBrowse || m.status != "saved task #2; changed elsewhere, reloaded" || len(m.rows) != 6 {
+		t.Errorf("save after a change elsewhere: mode=%v status=%q rows=%d", m.mode, m.status, len(m.rows))
+	}
+	if err := other.DeleteTask(ctx, 6); err != nil { // pay the bill
+		t.Fatal(err)
+	}
+	deliver(m, pollMsg{})
+	if len(m.rows) != 5 {
+		t.Fatalf("rows after the delete: %d", len(m.rows))
+	}
+	// With a form open the rows stay put; the change is seen once it closes.
+	press(m, "j", "e")
+	if _, err := other.AddTask(ctx, task.NewTask{ProjectID: 2, Title: "file the return"}); err != nil {
+		t.Fatal(err)
+	}
+	m.status = "editing"
+	deliver(m, pollMsg{})
+	if m.mode != modeForm || m.status != "editing" || len(m.rows) != 5 {
+		t.Errorf("poll with a form open: mode=%v status=%q rows=%d", m.mode, m.status, len(m.rows))
+	}
+	press(m, "esc")
+	deliver(m, pollMsg{})
+	if m.mode != modeBrowse || m.status != "cancelled; changed elsewhere, reloaded" || len(m.rows) != 6 {
+		t.Errorf("poll after the form closed: mode=%v status=%q rows=%d", m.mode, m.status, len(m.rows))
+	}
+	// With a confirmation open the rows stay put too, so y acts on the row
+	// it names.
+	press(m, "G", "d")
+	if err := other.DeleteTask(ctx, 2); err != nil {
+		t.Fatal(err)
+	}
+	deliver(m, pollMsg{})
+	if m.mode != modeConfirmDelete || len(m.rows) != 6 {
+		t.Errorf("poll with a confirmation open: mode=%v rows=%d", m.mode, len(m.rows))
+	}
+	press(m, "y")
+	if m.err != nil || !strings.HasPrefix(m.status, "deleted task #") {
+		t.Errorf("delete after a poll: status=%q err=%v", m.status, m.err)
+	}
+}
+
+// TestPollHintSurvivesReload checks that a poll that reloads keeps the
+// message that explains the last action, such as where a row went, and
+// adds its own note after it.
+func TestPollHintSurvivesReload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tasktracker.db")
+	m, store := setupAt(t, nil, path)
+	other, err := task.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	press(m, "j", "x", "z") // drop paint the hall, then archive it: hidden
+	if m.status != "task #1 archived (hidden; f shows archived)" {
+		t.Fatalf("status before the poll: %q", m.status)
+	}
+	if _, err := other.AddTask(context.Background(), task.NewTask{ProjectID: 2, Title: "file the return"}); err != nil {
+		t.Fatal(err)
+	}
+	deliver(m, pollMsg{})
+	if m.status != "task #1 archived (hidden; f shows archived); changed elsewhere, reloaded" {
+		t.Errorf("status after the poll: %q", m.status)
+	}
+	// With nothing to say, the note stands alone.
+	m.status = ""
+	if _, err := other.AddTask(context.Background(), task.NewTask{ProjectID: 2, Title: "pay the bill"}); err != nil {
+		t.Fatal(err)
+	}
+	deliver(m, pollMsg{})
+	if m.status != "changed elsewhere, reloaded" {
+		t.Errorf("status after a quiet poll: %q", m.status)
+	}
+	// Change after change does not pile the note up.
+	for i := range 3 {
+		if _, err := other.AddTask(context.Background(), task.NewTask{ProjectID: 2, Title: fmt.Sprintf("errand %d", i)}); err != nil {
+			t.Fatal(err)
+		}
+		deliver(m, pollMsg{})
+	}
+	if m.status != "changed elsewhere, reloaded" {
+		t.Errorf("status after polls in a row: %q", m.status)
+	}
+	// An error from the last action is left for a keypress to clear;
+	// a poll's own error goes once a poll succeeds.
+	m.err = errors.New("from an action")
+	deliver(m, pollMsg{})
+	if m.err == nil || m.err.Error() != "from an action" {
+		t.Errorf("poll cleared the action's error: %v", m.err)
+	}
+	m.err, m.pollErr = errors.New("from a poll"), true
+	deliver(m, pollMsg{})
+	if m.err != nil || m.pollErr {
+		t.Errorf("poll left its own error: %v", m.err)
+	}
+	// A keypress clears any error, and forgets where it came from, so a
+	// later poll cannot clear an action's error on the strength of an
+	// older poll's.
+	m.err, m.pollErr = errors.New("from a poll"), true
+	press(m, "k")
+	if m.err != nil || m.pollErr {
+		t.Errorf("keypress left the poll error: %v pollErr=%v", m.err, m.pollErr)
+	}
+	// A poll that cannot read the store leaves an action's error where it
+	// is, and sets its own only when there is none.
+	store.Close()
+	m.err = errors.New("from an action")
+	deliver(m, pollMsg{})
+	if m.err == nil || m.err.Error() != "from an action" || m.pollErr {
+		t.Errorf("failing poll over an action's error: err=%v pollErr=%v", m.err, m.pollErr)
+	}
+	m.err = nil
+	deliver(m, pollMsg{})
+	if m.err == nil || !m.pollErr {
+		t.Errorf("poll on a closed store: err=%v pollErr=%v", m.err, m.pollErr)
+	}
+}
+
+// TestChangedElsewhereAtQuit checks the last look Run takes on the way
+// out: a change from another process that no poll has seen yet counts,
+// one that a reload has taken in is already counted, and a store that
+// cannot be read is taken as changed.
+func TestChangedElsewhereAtQuit(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tasktracker.db")
+	m, store := setupAt(t, nil, path)
+	other, err := task.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if m.changedElsewhere() {
+		t.Error("nothing written, yet changed")
+	}
+	press(m, "j", "space") // an own write is not from elsewhere
+	if m.changedElsewhere() {
+		t.Error("own write counted as from elsewhere")
+	}
+	if _, err := other.AddTask(context.Background(), task.NewTask{ProjectID: 2, Title: "file the return"}); err != nil {
+		t.Fatal(err)
+	}
+	if !m.changedElsewhere() {
+		t.Error("a write from elsewhere with no poll since was missed")
+	}
+	press(m, "r")
+	if m.changedElsewhere() || !m.changed {
+		t.Errorf("after a reload: elsewhere=%v changed=%v", m.changedElsewhere(), m.changed)
+	}
+	store.Close()
+	if !m.changedElsewhere() {
+		t.Error("an unreadable store was not taken as changed")
+	}
+}
+
+// TestPollLandsByDeadline checks where the cursor goes by deadline when
+// another process moves the selected task to another bucket, or deletes
+// it. After the move, tree order and due order disagree: paint the hall
+// is the first task in the tree but comes after fix the gate by
+// deadline.
+func TestPollLandsByDeadline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tasktracker.db")
+	m, _ := setupAt(t, nil, path)
+	ctx := context.Background()
+	other, err := task.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	press(m, "v") // lands on paint the hall, the soonest due in house
+	if r, _ := m.selected(); r.target() != (target{rowTask, 1}) {
+		t.Fatalf("start: %v", r.target())
+	}
+	// The due date changes elsewhere: the task moves into the next 7
+	// days, after fix the gate, and the cursor follows it.
+	due := "2026-09-21"
+	if _, err := other.UpdateTask(ctx, 1, task.TaskEdit{Due: &due}); err != nil {
+		t.Fatal(err)
+	}
+	deliver(m, pollMsg{})
+	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Next 7 days", "T:fix the gate", "T:paint the hall", "S:buy paint", "S:move furniture", "H:No deadline", "T:email accountant"}) {
+		t.Errorf("rows after the due date moved: %v", got)
+	}
+	if r, _ := m.selected(); r.target() != (target{rowTask, 1}) || m.cursor != 2 || !m.changed {
+		t.Errorf("cursor after the due date moved: %v at %d, changed=%v", r.target(), m.cursor, m.changed)
+	}
+	// The task is deleted elsewhere. The No deadline heading slides into
+	// the cursor's place, so the cursor moves on to the task under it.
+	if err := other.DeleteTask(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	deliver(m, pollMsg{})
+	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Next 7 days", "T:fix the gate", "H:No deadline", "T:email accountant"}) {
+		t.Errorf("rows after the delete: %v", got)
+	}
+	if r, _ := m.selected(); r.target() != (target{rowTask, 3}) {
+		t.Errorf("cursor after the delete: %v, want email accountant", r.target())
 	}
 }
 

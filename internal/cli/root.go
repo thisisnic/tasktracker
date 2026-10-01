@@ -62,7 +62,7 @@ config if it is not in the usual place.
 
 Backups are encrypted snapshots written to a folder you choose. Run
 tasktracker key new once to set that up; with on_quit set in the config the
-TUI writes one when it exits after changing something.`,
+TUI writes one when it exits, unless nothing changed while it was open.`,
 		Version:       version.String(),
 		SilenceUsage:  true,
 		SilenceErrors: true,

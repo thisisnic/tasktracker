@@ -673,6 +673,39 @@ func TestOpenLeavesUserDirAlone(t *testing.T) {
 	}
 }
 
+// TestDataVersion checks that the version moves on a change from another
+// connection and stays put on this one's own.
+func TestDataVersion(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "tasktracker.db")
+	a, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	b, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	v0, err := a.DataVersion(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	addProject(t, a, NewProject{Name: "mine"})
+	if v, err := a.DataVersion(ctx); err != nil || v != v0 {
+		t.Errorf("own write moved the version: %d -> %d, %v", v0, v, err)
+	}
+	addProject(t, b, NewProject{Name: "theirs"})
+	v1, err := a.DataVersion(ctx)
+	if err != nil || v1 == v0 {
+		t.Errorf("another connection's write left the version: %d -> %d, %v", v0, v1, err)
+	}
+	if v, err := a.DataVersion(ctx); err != nil || v != v1 {
+		t.Errorf("version moved with no write: %d -> %d, %v", v1, v, err)
+	}
+}
+
 func TestSnapshotTo(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)

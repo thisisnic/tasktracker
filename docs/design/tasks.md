@@ -181,21 +181,50 @@ Layout, to be adjusted as it gets used:
   and finished projects (done or shelved) are hidden by default and shown
   with a toggle, so the tree stays short.
 
+## Changes from elsewhere
+
+The CLI and the UI can be open on the same database at once, and a
+coding agent on the CLI is the usual case. The UI used to show what it
+loaded until a key reloaded it, so a task added by the agent was invisible
+until the owner pressed something that happened to reload.
+
+- The UI polls: every couple of seconds it reads SQLite's data version,
+  which moves when another connection commits and not when its own does,
+  and reloads the rows when it has moved. The check is one pragma, so it
+  is cheap enough to do often; the reload only happens on a change.
+- The cursor follows the same rule as after any other change: it stays
+  on the same row where that row still exists, and otherwise keeps its
+  place. The status line says the database was changed elsewhere, so a
+  row that moved or vanished is explained; it says so after whatever
+  reload took the change in, a poll or a key such as `r` or a save, and
+  after that reload's own message.
+- While a form or a confirmation is open the rows are not reloaded. The
+  form holds what was typed, and a confirmation names the row it will act
+  on, so neither should have the rows move under it. The next poll after
+  it closes picks the change up; a save reloads anyway.
+- A change from elsewhere counts as a change for the backup on quit, so a
+  session that watched an agent work still backs up as it closes. It is
+  counted by the reload itself, whatever prompted it, so a change taken
+  in by `r`, `f` or `v` before the next poll is not missed; and the UI
+  takes one last look at the version as it quits, for a change that
+  landed after the final poll or while a form was open.
+
 ## Backups on quit
 
 The UI can back up as it closes. It used to do that every time, and the
 backup package would then find the database unchanged and write nothing;
 but the snapshot was still taken, and with git on the push was still
-tried. Most sessions only look. So the UI keeps track of whether it wrote
-anything, and on quit skips the whole step when it did not, saying so in
-one line.
+tried. Most sessions only look. So the UI keeps track of whether the
+database changed while it was open, by its own writes or by another
+process it saw, and on quit skips the whole step when it did not, saying
+so in one line.
 
-- The rule is "did this UI write to the database", not "is the backup up
-  to date". A change made by the CLI, whether or not a UI was open at
-  the time, is kept by the next session that writes something, or by
-  running the backup command, which checks the database itself. That
-  trade is taken knowingly: the on-quit backup is a convenience for the
-  common case, and the command is there for the rest.
+- The rule is "did the database change while the UI was open", by the UI
+  or by another process it saw, not "is the backup up to date". A change
+  made by the CLI while no UI was open is kept by the next session that
+  changes something, or by running the backup command, which checks the
+  database itself. That trade is taken knowingly: the on-quit backup is a
+  convenience for the common case, and the command is there for the rest.
 - A write that fails, a cancelled form and a declined confirmation do
   not count; a save that changed nothing does, since the store was
   written to.

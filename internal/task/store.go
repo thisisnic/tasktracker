@@ -246,6 +246,21 @@ func (s *Store) SnapshotTo(ctx context.Context, path string) error {
 	return nil
 }
 
+// DataVersion is a number that changes whenever another connection, in
+// this process or another, commits a change to the database. This
+// connection's own commits leave it as it is, and the number means
+// nothing on its own: only a difference between two readings does. The
+// pool holds one connection and keeps it, so two readings from the same
+// Store are from the same connection in practice; a connection replaced
+// after an error reads as one change more, which is harmless.
+func (s *Store) DataVersion(ctx context.Context) (int64, error) {
+	var v int64
+	if err := s.db.QueryRowContext(ctx, `PRAGMA data_version`).Scan(&v); err != nil {
+		return 0, fmt.Errorf("data version: %w", err)
+	}
+	return v, nil
+}
+
 func now() string { return time.Now().UTC().Format(time.RFC3339) }
 
 func parseTime(s string) time.Time {

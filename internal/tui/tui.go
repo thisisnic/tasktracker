@@ -5,6 +5,8 @@
 // tasks soonest due first. A project in the tree can be collapsed to hide
 // its tasks, and an area to hide everything in it. The right pane shows
 // the selected item. Forms for adding and editing take over both panes.
+// The UI polls the database for changes made by another process and
+// reloads when it finds one.
 package tui
 
 import (
@@ -33,8 +35,9 @@ type Options struct {
 }
 
 // Run opens the by-project view and blocks until the user quits. It
-// reports whether the UI wrote to the database, which is what decides
-// whether a backup on quit is worth taking.
+// reports whether the database changed while the UI was open, by the UI
+// or by another process it saw, which is what decides whether a backup
+// on quit is worth taking.
 func Run(ctx context.Context, store *task.Store, opts Options) (changed bool, err error) {
 	m := newModel(ctx, store, opts.Goals)
 	m.showAll = opts.ShowFinished
@@ -42,7 +45,17 @@ func Run(ctx context.Context, store *task.Store, opts Options) (changed bool, er
 		return false, err
 	}
 	_, err = tea.NewProgram(m, tea.WithContext(ctx)).Run()
-	return m.changed, err
+	// A last look, for a change that landed after the final poll, or
+	// while a form was open until the moment of quitting.
+	return m.changed || m.changedElsewhere(), err
+}
+
+// changedElsewhere reports whether another process has changed the
+// database since the rows were last loaded. When that cannot be read it
+// says yes: a backup taken for nothing costs less than one not taken.
+func (m *model) changedElsewhere() bool {
+	v, err := m.store.DataVersion(m.ctx)
+	return err != nil || (m.loadedOnce && v != m.loaded)
 }
 
 type mode int
@@ -68,6 +81,18 @@ func (v viewKind) String() string {
 		return "by deadline"
 	}
 	return "by project"
+}
+
+// pollEvery is how often the UI looks for changes made by another
+// process, such as the CLI or a second UI on the same database. The check
+// is one pragma, so it is cheap to make often.
+const pollEvery = 2 * time.Second
+
+// pollMsg says it is time to look for changes made elsewhere.
+type pollMsg struct{}
+
+func poll() tea.Cmd {
+	return tea.Tick(pollEvery, func(time.Time) tea.Msg { return pollMsg{} })
 }
 
 // rowKind says what a row in the left pane stands for.
@@ -185,15 +210,18 @@ type model struct {
 	goals *goallink.Reader
 	now   func() time.Time
 
-	outline task.Outline
-	areas   []task.Area // every area, flat, for paths and pick lists
-	rows    []row
-	cursor  int
-	width   int
-	height  int
-	showAll bool     // show archived tasks and finished projects
-	view    viewKind // by project or by deadline
-	changed bool     // the UI has written to the database
+	outline    task.Outline
+	areas      []task.Area // every area, flat, for paths and pick lists
+	rows       []row
+	cursor     int
+	width      int
+	height     int
+	showAll    bool     // show archived tasks and finished projects
+	view       viewKind // by project or by deadline
+	changed    bool     // the database has changed since the UI opened, by it or by another process it saw
+	loaded     int64    // the store's data version when the rows were last loaded
+	loadedOnce bool     // loaded holds a reading, so a different one is a change from elsewhere
+	unnoted    bool     // a reload took in a change from elsewhere that the status line has not yet said
 	// collapsed holds the areas and projects whose contents are hidden in
 	// the tree. It is kept across reloads, so a fold survives edits.
 	collapsed map[target]bool
@@ -202,10 +230,11 @@ type model struct {
 	goalLabels map[int64][]goallink.Goal
 	goalErr    error
 
-	mode   mode
-	form   editor
-	status string
-	err    error
+	mode    mode
+	form    editor
+	status  string
+	err     error
+	pollErr bool // err came from a poll, so a poll that goes well clears it
 }
 
 func newModel(ctx context.Context, store *task.Store, goals *goallink.Reader) *model {
@@ -228,6 +257,18 @@ func (m *model) reload() error {
 		t := r.target()
 		keep = &t
 	}
+	// The version is read before the data, so a change that lands between
+	// the two is loaded again on the next poll rather than missed. A
+	// version other than the last one loaded means another process wrote
+	// in between, whatever prompted this reload, so the change is counted
+	// here rather than only when a poll finds it.
+	loaded, err := m.store.DataVersion(m.ctx)
+	if err != nil {
+		return err
+	}
+	if m.loadedOnce && loaded != m.loaded {
+		m.changed, m.unnoted = true, true
+	}
 	outline, err := m.store.Outline(m.ctx, m.showAll)
 	if err != nil {
 		return err
@@ -241,6 +282,9 @@ func (m *model) reload() error {
 		return err
 	}
 	m.rebuildRows()
+	// The version is kept only once the rows are rebuilt from it, so a
+	// reload that failed part way is tried again by the next poll.
+	m.loaded, m.loadedOnce = loaded, true
 	if keep != nil && !m.selectNear(*keep) && m.view == viewDeadline {
 		// The row is gone from the list, as when a task is finished here.
 		// The cursor keeps its place; if the heading of the next bucket
@@ -490,10 +534,35 @@ func (m *model) projectGoals(p task.Project) []goallink.Goal {
 	return goals
 }
 
-func (m *model) Init() tea.Cmd { return nil }
+func (m *model) Init() tea.Cmd { return poll() }
 
+// Update handles a message, then notes on the status line any change
+// from elsewhere that the handling took in: a poll finds one on purpose,
+// but r, f, v and a save reload too, and a row that moved or vanished
+// under any of them wants the same explanation.
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	model, cmd := m.update(msg)
+	if m.unnoted && m.mode == modeBrowse {
+		m.unnoted = false
+		// The last action's message stays, with the reload noted once
+		// after it: a hint that says where a row went is still wanted
+		// when an agent on the CLI is writing every few seconds.
+		const note = "changed elsewhere, reloaded"
+		switch {
+		case m.status == "":
+			m.status = note
+		case !strings.HasSuffix(m.status, note):
+			m.status += "; " + note
+		}
+	}
+	return model, cmd
+}
+
+func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case pollMsg:
+		m.poll()
+		return m, poll()
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		if m.mode == modeForm && m.form != nil {
@@ -515,6 +584,46 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateForm(msg)
 	}
 	return m, nil
+}
+
+// poll reloads the rows when another process has changed the database
+// since they were loaded, so a task added or finished elsewhere shows up
+// without a keypress; Update then says so on the status line. It only
+// looks while browsing: a form holds what was typed, and a confirmation
+// names the selected row, so neither should have the rows move under
+// it. A change made while one is open is seen by the next poll after it
+// closes, or absorbed by the reload that follows a save; either way
+// reload counts it for the backup on quit.
+func (m *model) poll() {
+	if m.mode != modeBrowse {
+		return
+	}
+	v, err := m.store.DataVersion(m.ctx)
+	found := err == nil && v != m.loaded
+	if found {
+		err = m.refresh()
+	}
+	// A poll's own error, such as a lock held for a moment by the CLI,
+	// is cleared by the next poll that goes well; an error from the last
+	// action is left for a keypress to clear, as it always was, and a
+	// poll's error never takes its place.
+	switch {
+	case err != nil:
+		if m.err == nil || m.pollErr {
+			m.err, m.pollErr = err, true
+		}
+	case m.pollErr:
+		m.err, m.pollErr = nil, false
+	}
+}
+
+// refresh is the reload behind r and poll: everything is read again,
+// goal labels included, since another process may have changed any of
+// it.
+func (m *model) refresh() error {
+	m.goalLabels = map[int64][]goallink.Goal{}
+	m.goalErr = nil
+	return m.reload()
 }
 
 // footer renders the status and help lines wrapped to the terminal width.
@@ -597,7 +706,7 @@ func (t target) label() string {
 }
 
 func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	m.status, m.err = "", nil
+	m.status, m.err, m.pollErr = "", nil, false
 	switch msg.String() {
 	case "q", "ctrl+c", "esc":
 		return m, tea.Quit
@@ -614,10 +723,9 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "G", "end":
 		m.cursor = max(0, len(m.rows)-1)
 	case "r":
-		m.goalLabels = map[int64][]goallink.Goal{}
-		m.goalErr = nil
-		m.err = m.reload()
-		m.status = "reloaded"
+		if m.err = m.refresh(); m.err == nil {
+			m.status = "reloaded"
+		}
 	case "f":
 		m.showAll = !m.showAll
 		m.err = m.reload()
