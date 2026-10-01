@@ -181,6 +181,30 @@ Layout, to be adjusted as it gets used:
   and finished projects (done or shelved) are hidden by default and shown
   with a toggle, so the tree stays short.
 
+## Backups on quit
+
+The UI can back up as it closes. It used to do that every time, and the
+backup package would then find the database unchanged and write nothing;
+but the snapshot was still taken, and with git on the push was still
+tried. Most sessions only look. So the UI keeps track of whether it wrote
+anything, and on quit skips the whole step when it did not, saying so in
+one line.
+
+- The rule is "did this UI write to the database", not "is the backup up
+  to date". A change made by the CLI, whether or not a UI was open at
+  the time, is kept by the next session that writes something, or by
+  running the backup command, which checks the database itself. That
+  trade is taken knowingly: the on-quit backup is a convenience for the
+  common case, and the command is there for the rest.
+- A write that fails, a cancelled form and a declined confirmation do
+  not count; a save that changed nothing does, since the store was
+  written to.
+- With git on, a push that failed is retried on every later run, and a
+  quit that changed nothing is one of them: the push is skipped when
+  there is nothing to push, so it costs no more than a few local git
+  commands. Before the first backup there is no repo to push from, so
+  nothing is tried.
+
 ## Open questions
 
 1. **Day to day.** What to see first when opening the app. The tree opens

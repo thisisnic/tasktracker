@@ -12,28 +12,29 @@ import (
 )
 
 // Push commits the backup file in dir and pushes to the repo's upstream.
-// It is a no-op when nothing changed. Push needs credentials that work
-// without a prompt, such as an SSH key. The returned error wraps
-// ErrPushFailed when the commit succeeded but the push did not, so the
-// caller can treat that as a warning: the backup is safe on disk and the
-// next push will carry it.
-func Push(ctx context.Context, dir string, now time.Time) error {
+// It is a no-op when nothing changed, and reports whether anything was
+// pushed, so a caller can tell a push from a run that had nothing to do.
+// Push needs credentials that work without a prompt, such as an SSH key.
+// The returned error wraps ErrPushFailed when the commit succeeded but
+// the push did not, so the caller can treat that as a warning: the backup
+// is safe on disk and the next push will carry it.
+func Push(ctx context.Context, dir string, now time.Time) (pushed bool, err error) {
 	// Before anything is committed, a cancelled context is just that: not
 	// a push failure, which would wrongly claim a commit was made.
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("backup git cancelled: %w", err)
+		return false, fmt.Errorf("backup git cancelled: %w", err)
 	}
 	if out, err := git(ctx, dir, "rev-parse", "--is-inside-work-tree"); err != nil || strings.TrimSpace(out) != "true" {
 		if cerr := ctx.Err(); cerr != nil {
-			return fmt.Errorf("backup git cancelled: %w", cerr)
+			return false, fmt.Errorf("backup git cancelled: %w", cerr)
 		}
-		return fmt.Errorf("%s is not a git repository; run git init there or set git = false", dir)
+		return false, fmt.Errorf("%s is not a git repository; run git init there or set git = false", dir)
 	}
 	if _, err := git(ctx, dir, "add", "--", FileName); err != nil {
 		if cerr := ctx.Err(); cerr != nil {
-			return fmt.Errorf("backup git cancelled: %w", cerr)
+			return false, fmt.Errorf("backup git cancelled: %w", cerr)
 		}
-		return err
+		return false, err
 	}
 	// Anything staged?
 	if _, err := git(ctx, dir, "diff", "--cached", "--quiet", "--", FileName); err == nil {
@@ -47,11 +48,11 @@ func Push(ctx context.Context, dir string, now time.Time) error {
 			// nothing is staged any more, it landed, and this is a push
 			// failure rather than a cancellation.
 			if committed(dir) {
-				return fmt.Errorf("%w: committed, but the run was cancelled before pushing: %v", ErrPushFailed, cerr)
+				return false, fmt.Errorf("%w: committed, but the run was cancelled before pushing: %v", ErrPushFailed, cerr)
 			}
-			return fmt.Errorf("backup git cancelled: %w", cerr)
+			return false, fmt.Errorf("backup git cancelled: %w", cerr)
 		}
-		return err
+		return false, err
 	}
 	return push(ctx, dir)
 }
@@ -73,38 +74,40 @@ var ErrPushFailed = errors.New("push failed")
 // TUI from exiting for long.
 const pushTimeout = 60 * time.Second
 
-func push(ctx context.Context, dir string) error {
+// push sends what is committed to the upstream, and reports whether it
+// sent anything.
+func push(ctx context.Context, dir string) (pushed bool, err error) {
 	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
 	defer cancel()
 	if _, err := git(ctx, dir, "rev-parse", "--verify", "-q", "HEAD"); err != nil {
 		if ctx.Err() != nil {
-			return pushError(ctx, err)
+			return false, pushError(ctx, err)
 		}
-		return nil // nothing committed yet, nothing to push
+		return false, nil // nothing committed yet, nothing to push
 	}
 	_, upstreamErr := git(ctx, dir, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
 	if upstreamErr == nil {
 		// Skip the network when there is nothing to push.
 		if out, err := git(ctx, dir, "rev-list", "--count", "@{upstream}..HEAD"); err == nil && strings.TrimSpace(out) == "0" {
-			return nil
+			return false, nil
 		}
 		if _, err := git(ctx, dir, "push", "-q"); err != nil {
-			return pushError(ctx, err)
+			return false, pushError(ctx, err)
 		}
-		return nil
+		return true, nil
 	}
 	if ctx.Err() != nil {
-		return pushError(ctx, upstreamErr)
+		return false, pushError(ctx, upstreamErr)
 	}
 	// First push of a fresh clone: set the upstream as we go.
 	branch, err := git(ctx, dir, "rev-parse", "--abbrev-ref", "HEAD")
 	if err != nil {
-		return pushError(ctx, err)
+		return false, pushError(ctx, err)
 	}
 	if _, err := git(ctx, dir, "push", "-q", "-u", "origin", strings.TrimSpace(branch)); err != nil {
-		return pushError(ctx, err)
+		return false, pushError(ctx, err)
 	}
-	return nil
+	return true, nil
 }
 
 // pushError wraps a failed push once in ErrPushFailed, adding a hint for

@@ -121,7 +121,7 @@ tasktracker task list --due --json
   that database the ids are shown bare and nothing else changes.
 - **Encrypted backups** - One age-encrypted file, written to a folder you
   choose, and optionally committed and pushed to your own private git repo
-  every time the UI exits.
+  when the UI exits after changing something.
 - **Agent friendly** - A plain CLI with JSON output, so a coding agent can
   read and update your tasks without touching the UI.
 - **Local and portable** - A single static binary and a single SQLite file
@@ -164,7 +164,7 @@ your public key together with a config to copy into
 dir = "~/tasktracker-data"                      # your private data repo
 recipient = "age1..."                           # public key, encrypts
 identity_file = "~/.config/tasktracker/key.txt" # private key, decrypts
-on_quit = true                                  # back up every time the UI exits
+on_quit = true                                  # back up when the UI exits after a change
 git = false                                     # true: git commit and push from dir too
 ```
 
@@ -176,7 +176,14 @@ tasktracker backup            # back up now (skipped if unchanged)
 tasktracker restore           # put the backup in place of the database
 ```
 
-With `git = true` tasktracker commits and pushes the file after each backup.
+With `on_quit` the UI backs up as it closes, unless nothing changed while
+it was open: a session that only looked prints `backup: nothing changed
+this session` and leaves the backup alone. Changes made by the CLI while
+no UI is open are kept by the next session that changes something, or by
+running `tasktracker backup`, which always checks the database itself.
+
+With `git = true` tasktracker commits and pushes the file after each backup,
+and a quit that changed nothing still pushes if an earlier push failed.
 The data repo needs a remote and credentials that work without a prompt, such
 as an SSH key in an agent. A failed push is reported and retried next time.
 

@@ -24,20 +24,32 @@ func runTUI(cmd *cobra.Command, dbPath, cfgPath string) error {
 		return err
 	}
 	defer store.Close()
-	if err := tui.Run(cmd.Context(), store, tui.Options{Goals: goals}); err != nil {
+	changed, err := tui.Run(cmd.Context(), store, tui.Options{Goals: goals})
+	if err != nil {
 		return err
 	}
-	return afterQuit(cmd, store, dbPath, cfg, cfgErr)
+	return afterQuit(cmd, store, dbPath, cfg, cfgErr, changed)
 }
 
 // afterQuit is what happens once the UI has closed: a backup when the
-// config asks for one, or the config's own error when it could not be read.
-func afterQuit(cmd *cobra.Command, store *task.Store, dbPath string, cfg config.Config, cfgErr error) error {
+// config asks for one and the database changed while the UI was open, or
+// the config's own error when it could not be read. A session that only
+// looked has nothing new to keep, so it skips the snapshot; with git on
+// it still pushes, in case an earlier push failed and left a commit
+// waiting. `tasktracker backup` checks the database itself.
+func afterQuit(cmd *cobra.Command, store *task.Store, dbPath string, cfg config.Config, cfgErr error, changed bool) error {
 	if cfgErr != nil {
 		return fmt.Errorf("no backup on quit: %w", cfgErr)
 	}
-	if cfg.Backup.OnQuit && cfg.Backup.Configured() {
-		return runBackup(cmd, store, dbPath, cfg.Backup)
+	if !cfg.Backup.OnQuit || !cfg.Backup.Configured() {
+		return nil
 	}
-	return nil
+	if !changed {
+		fmt.Fprintln(cmd.OutOrStdout(), "backup: nothing changed this session")
+		if cfg.Backup.Git && hasBackup(cfg.Backup.Dir) {
+			return pushBackup(cmd, cfg.Backup)
+		}
+		return nil
+	}
+	return runBackup(cmd, store, dbPath, cfg.Backup)
 }

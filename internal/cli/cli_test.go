@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -604,15 +605,11 @@ func TestBadIDs(t *testing.T) {
 	}
 }
 
-func TestKeyBackupRestore(t *testing.T) {
-	r := newRunner(t)
-	root := t.TempDir()
-	keyFile := filepath.Join(root, "key.txt")
-	cfgPath := filepath.Join(root, "config.toml")
-	dir := filepath.Join(root, "data-repo")
-
-	out := r.run("", false, "key", "new", "--out", keyFile)
-	var recipient string
+// newKey runs key new with the private key at path and returns the public
+// key it printed.
+func newKey(t *testing.T, r *runner, path string) (recipient string) {
+	t.Helper()
+	out := r.run("", false, "key", "new", "--out", path)
 	for _, line := range strings.Split(out, "\n") {
 		if strings.HasPrefix(line, "public key: ") {
 			recipient = strings.TrimPrefix(line, "public key: ")
@@ -621,6 +618,29 @@ func TestKeyBackupRestore(t *testing.T) {
 	if !strings.HasPrefix(recipient, "age1") {
 		t.Fatalf("no public key in output:\n%s", out)
 	}
+	return recipient
+}
+
+// quit runs afterQuit as the TUI command would on the way out, and
+// returns what it printed.
+func quit(store *task.Store, db string, cfg config.Config, cfgErr error, changed bool) (string, error) {
+	cmd := New()
+	cmd.SetContext(context.Background())
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	err := afterQuit(cmd, store, db, cfg, cfgErr, changed)
+	return buf.String(), err
+}
+
+func TestKeyBackupRestore(t *testing.T) {
+	r := newRunner(t)
+	root := t.TempDir()
+	keyFile := filepath.Join(root, "key.txt")
+	cfgPath := filepath.Join(root, "config.toml")
+	dir := filepath.Join(root, "data-repo")
+
+	recipient := newKey(t, r, keyFile)
 	r.run("", true, "key", "new", "--out", keyFile) // refuses to overwrite
 
 	// Without config, backup explains what to do.
@@ -634,7 +654,7 @@ func TestKeyBackupRestore(t *testing.T) {
 	}
 
 	r.run("", false, "project", "add", "keep this")
-	out = r.run("", false, "--config", cfgPath, "backup")
+	out := r.run("", false, "--config", cfgPath, "backup")
 	if !strings.Contains(out, "backup: wrote ") {
 		t.Fatalf("backup output: %q", out)
 	}
@@ -694,13 +714,7 @@ func TestAfterQuit(t *testing.T) {
 	r := newRunner(t)
 	root := t.TempDir()
 	keyFile := filepath.Join(root, "key.txt")
-	out := r.run("", false, "key", "new", "--out", keyFile)
-	var recipient string
-	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, "public key: ") {
-			recipient = strings.TrimPrefix(line, "public key: ")
-		}
-	}
+	recipient := newKey(t, r, keyFile)
 	store, err := task.Open(r.db)
 	if err != nil {
 		t.Fatal(err)
@@ -709,39 +723,131 @@ func TestAfterQuit(t *testing.T) {
 	if _, err := store.AddProject(context.Background(), task.NewProject{Name: "x"}); err != nil {
 		t.Fatal(err)
 	}
-	run := func(cfg config.Config, cfgErr error) (string, error) {
-		cmd := New()
-		cmd.SetContext(context.Background())
-		var buf bytes.Buffer
-		cmd.SetOut(&buf)
-		cmd.SetErr(&buf)
-		err := afterQuit(cmd, store, r.db, cfg, cfgErr)
-		return buf.String(), err
+	run := func(cfg config.Config, cfgErr error, changed bool) (string, error) {
+		return quit(store, r.db, cfg, cfgErr, changed)
 	}
 	// A config that could not be read is the error, and nothing is written.
-	if _, err := run(config.Config{}, errors.New("bad toml")); err == nil || !strings.Contains(err.Error(), "no backup on quit: bad toml") {
+	if _, err := run(config.Config{}, errors.New("bad toml"), true); err == nil || !strings.Contains(err.Error(), "no backup on quit: bad toml") {
 		t.Errorf("broken config: %v", err)
 	}
-	// on_quit without a folder or key: nothing to do, no error.
-	if out, err := run(config.Config{Backup: config.Backup{OnQuit: true}}, nil); err != nil || out != "" {
+	// on_quit without a folder or key: nothing to do, no error, whether
+	// or not anything changed.
+	if out, err := run(config.Config{Backup: config.Backup{OnQuit: true}}, nil, true); err != nil || out != "" {
 		t.Errorf("unconfigured on_quit: %q, %v", out, err)
+	}
+	if out, err := run(config.Config{Backup: config.Backup{OnQuit: true}}, nil, false); err != nil || out != "" {
+		t.Errorf("unconfigured on_quit, unchanged: %q, %v", out, err)
 	}
 	// on_quit off: nothing written even though a backup is configured.
 	dir := filepath.Join(root, "data-repo")
 	b := config.Backup{Dir: dir, Recipient: recipient, IdentityFile: keyFile}
-	if out, err := run(config.Config{Backup: b}, nil); err != nil || out != "" {
+	if out, err := run(config.Config{Backup: b}, nil, true); err != nil || out != "" {
 		t.Errorf("on_quit off: %q, %v", out, err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "tasktracker.db.age")); !os.IsNotExist(err) {
 		t.Error("backup written with on_quit off")
 	}
-	// on_quit with a configured backup writes one.
+	// on_quit with a configured backup, but a session that changed
+	// nothing: says so, and nothing is written.
 	b.OnQuit = true
-	if out, err := run(config.Config{Backup: b}, nil); err != nil || !strings.Contains(out, "backup: wrote ") {
+	if out, err := run(config.Config{Backup: b}, nil, false); err != nil || out != "backup: nothing changed this session\n" {
+		t.Errorf("on_quit, unchanged: %q, %v", out, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "tasktracker.db.age")); !os.IsNotExist(err) {
+		t.Error("backup written after a session that changed nothing")
+	}
+	// on_quit after a session that changed something writes one.
+	if out, err := run(config.Config{Backup: b}, nil, true); err != nil || !strings.Contains(out, "backup: wrote ") {
 		t.Errorf("on_quit: %q, %v", out, err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "tasktracker.db.age")); err != nil {
 		t.Error("no backup written on quit")
+	}
+}
+
+// TestAfterQuitRetriesPush checks that with git on, a quit after a session
+// that changed nothing still pushes a commit an earlier run could not.
+func TestAfterQuitRetriesPush(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	for _, v := range []string{"GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"} {
+		t.Setenv(v, "t")
+	}
+	for _, v := range []string{"GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"} {
+		t.Setenv(v, "t@t")
+	}
+	git := func(cwd string, args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = cwd
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	r := newRunner(t)
+	root := t.TempDir()
+	keyFile := filepath.Join(root, "key.txt")
+	recipient := newKey(t, r, keyFile)
+	// A bare "remote" and a clone of it as the data repo.
+	remote := filepath.Join(root, "remote.git")
+	dir := filepath.Join(root, "data-repo")
+	git(root, "init", "-q", "--bare", "-b", "main", remote)
+	git(root, "clone", "-q", remote, dir)
+	git(dir, "commit", "-q", "--allow-empty", "-m", "init")
+	git(dir, "push", "-q", "-u", "origin", "main")
+
+	store, err := task.Open(r.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	cfg := config.Config{Backup: config.Backup{Dir: dir, Recipient: recipient, IdentityFile: keyFile, OnQuit: true, Git: true}}
+	run := func(changed bool) (string, error) {
+		return quit(store, r.db, cfg, nil, changed)
+	}
+	// Before any backup, a look-only quit has nothing to push and does
+	// not touch the repo.
+	if out, err := run(false); err != nil || out != "backup: nothing changed this session\n" {
+		t.Fatalf("look-only quit before any backup: %q, %v", out, err)
+	}
+	if _, err := store.AddProject(context.Background(), task.NewProject{Name: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(true); err != nil || !strings.Contains(out, "backup: pushed") {
+		t.Fatalf("first backup: %q, %v", out, err)
+	}
+	// With everything pushed, a look-only quit says only that nothing
+	// changed: there is nothing to push, so no claim of a push.
+	if out, err := run(false); err != nil || out != "backup: nothing changed this session\n" {
+		t.Fatalf("look-only quit with nothing waiting: %q, %v", out, err)
+	}
+	// The remote goes away, so the next backup's push fails and its
+	// commit waits locally.
+	hidden := remote + ".away"
+	if err := os.Rename(remote, hidden); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddProject(context.Background(), task.NewProject{Name: "y"}); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run(true); err != nil || !strings.Contains(out, "committed locally but not pushed") {
+		t.Fatalf("backup with the remote away: %q, %v", out, err)
+	}
+	if err := os.Rename(hidden, remote); err != nil {
+		t.Fatal(err)
+	}
+	// A quit that changed nothing still carries the waiting commit.
+	out, err := run(false)
+	if err != nil || !strings.Contains(out, "nothing changed this session") || !strings.Contains(out, "backup: pushed") {
+		t.Fatalf("look-only quit with a commit waiting: %q, %v", out, err)
+	}
+	if log := git(remote, "log", "--format=%s", "main"); strings.Count(log, "tasktracker backup") != 2 {
+		t.Errorf("remote log after the retry:\n%s", log)
 	}
 }
 

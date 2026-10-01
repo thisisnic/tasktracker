@@ -62,16 +62,16 @@ func TestPushCommitsAndPushes(t *testing.T) {
 	ctx := context.Background()
 
 	e.run(t)
-	if err := Push(ctx, e.opts.Dir, now); err != nil {
-		t.Fatal(err)
+	if pushed, err := Push(ctx, e.opts.Dir, now); err != nil || !pushed {
+		t.Fatalf("first push: pushed=%v err=%v", pushed, err)
 	}
 	if log := remoteLog(t, remote); !strings.Contains(log, "tasktracker backup 2026-09-16 12:00 UTC") {
 		t.Errorf("remote log:\n%s", log)
 	}
 
-	// Nothing changed: no new commit, no error.
-	if err := Push(ctx, e.opts.Dir, now); err != nil {
-		t.Fatal(err)
+	// Nothing changed: no new commit, nothing pushed, no error.
+	if pushed, err := Push(ctx, e.opts.Dir, now); err != nil || pushed {
+		t.Fatalf("push with nothing new: pushed=%v err=%v", pushed, err)
 	}
 	if n := strings.Count(remoteLog(t, remote), "tasktracker backup"); n != 1 {
 		t.Errorf("unchanged backup produced %d commits", n)
@@ -82,8 +82,8 @@ func TestPushCommitsAndPushes(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.run(t)
-	if err := Push(ctx, e.opts.Dir, now); err != nil {
-		t.Fatal(err)
+	if pushed, err := Push(ctx, e.opts.Dir, now); err != nil || !pushed {
+		t.Fatalf("push of a change: pushed=%v err=%v", pushed, err)
 	}
 	if n := strings.Count(remoteLog(t, remote), "tasktracker backup"); n != 2 {
 		t.Errorf("changed backup: %d commits on remote", n)
@@ -100,7 +100,7 @@ func TestPushFailureIsRetried(t *testing.T) {
 	if err := os.Rename(remote, remote+".gone"); err != nil {
 		t.Fatal(err)
 	}
-	err := Push(ctx, e.opts.Dir, now)
+	_, err := Push(ctx, e.opts.Dir, now)
 	if !errors.Is(err, ErrPushFailed) {
 		t.Fatalf("err = %v, want ErrPushFailed", err)
 	}
@@ -114,8 +114,8 @@ func TestPushFailureIsRetried(t *testing.T) {
 	if err := os.Rename(remote+".gone", remote); err != nil {
 		t.Fatal(err)
 	}
-	if err := Push(ctx, e.opts.Dir, now); err != nil {
-		t.Fatal(err)
+	if pushed, err := Push(ctx, e.opts.Dir, now); err != nil || !pushed {
+		t.Fatalf("retry: pushed=%v err=%v", pushed, err)
 	}
 	if !strings.Contains(remoteLog(t, remote), "tasktracker backup") {
 		t.Error("earlier commit was not pushed on retry")
@@ -136,7 +136,7 @@ func TestPushFailureIsRetried(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.run(t)
-	err = Push(ctx, e.opts.Dir, now)
+	_, err = Push(ctx, e.opts.Dir, now)
 	if !errors.Is(err, ErrPushFailed) || !strings.Contains(err.Error(), "git pull") {
 		t.Errorf("rejected push: err = %v, want a pull hint", err)
 	}
@@ -148,7 +148,7 @@ func TestPushSubfolderOfRepo(t *testing.T) {
 	remote := gitRepos(t, parent)
 	e.opts.Dir = filepath.Join(parent, "nested")
 	e.run(t)
-	if err := Push(context.Background(), e.opts.Dir, now); err != nil {
+	if _, err := Push(context.Background(), e.opts.Dir, now); err != nil {
 		t.Fatalf("push from a subfolder of the repo: %v", err)
 	}
 	if !strings.Contains(remoteLog(t, remote), "tasktracker backup") {
@@ -170,15 +170,15 @@ func TestPushFromFreshCloneSetsUpstream(t *testing.T) {
 	}
 	ctx := context.Background()
 	e.run(t)
-	if err := Push(ctx, e.opts.Dir, now); err != nil {
-		t.Fatal(err)
+	if pushed, err := Push(ctx, e.opts.Dir, now); err != nil || !pushed {
+		t.Fatalf("first push from a fresh clone: pushed=%v err=%v", pushed, err)
 	}
 	if !strings.Contains(remoteLog(t, remote), "tasktracker backup") {
 		t.Error("first push from a fresh clone did not reach the remote")
 	}
 	// Second time round the upstream is set and nothing is pending.
-	if err := Push(ctx, e.opts.Dir, now); err != nil {
-		t.Fatal(err)
+	if pushed, err := Push(ctx, e.opts.Dir, now); err != nil || pushed {
+		t.Fatalf("second push from the clone: pushed=%v err=%v", pushed, err)
 	}
 }
 
@@ -186,7 +186,7 @@ func TestPushNeedsRepo(t *testing.T) {
 	e := newEnv(t)
 	isolateGit(t)
 	e.run(t)
-	if err := Push(context.Background(), e.opts.Dir, now); err == nil || !strings.Contains(err.Error(), "not a git repository") {
+	if _, err := Push(context.Background(), e.opts.Dir, now); err == nil || !strings.Contains(err.Error(), "not a git repository") {
 		t.Errorf("err = %v", err)
 	}
 }
@@ -236,12 +236,12 @@ func TestPushCancelledContextIsNotSuccess(t *testing.T) {
 	cancel()
 	// Nothing was committed, so this must not look like a push failure,
 	// which the CLI would report as "committed locally".
-	err := Push(ctx, e.opts.Dir, now)
+	_, err := Push(ctx, e.opts.Dir, now)
 	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrPushFailed) || strings.Contains(err.Error(), "not a git repository") {
 		t.Errorf("Push with a cancelled context: %v", err)
 	}
 	// After a commit, the network step is what fails.
-	if err := push(ctx, e.opts.Dir); !errors.Is(err, ErrPushFailed) {
+	if _, err := push(ctx, e.opts.Dir); !errors.Is(err, ErrPushFailed) {
 		t.Errorf("push with a cancelled context: %v", err)
 	}
 }

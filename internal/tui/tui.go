@@ -32,15 +32,17 @@ type Options struct {
 	ShowFinished bool
 }
 
-// Run opens the by-project view and blocks until the user quits.
-func Run(ctx context.Context, store *task.Store, opts Options) error {
+// Run opens the by-project view and blocks until the user quits. It
+// reports whether the UI wrote to the database, which is what decides
+// whether a backup on quit is worth taking.
+func Run(ctx context.Context, store *task.Store, opts Options) (changed bool, err error) {
 	m := newModel(ctx, store, opts.Goals)
 	m.showAll = opts.ShowFinished
 	if err := m.reload(); err != nil {
-		return err
+		return false, err
 	}
-	_, err := tea.NewProgram(m, tea.WithContext(ctx)).Run()
-	return err
+	_, err = tea.NewProgram(m, tea.WithContext(ctx)).Run()
+	return m.changed, err
 }
 
 type mode int
@@ -191,6 +193,7 @@ type model struct {
 	height  int
 	showAll bool     // show archived tasks and finished projects
 	view    viewKind // by project or by deadline
+	changed bool     // the UI has written to the database
 	// collapsed holds the areas and projects whose contents are hidden in
 	// the tree. It is kept across reloads, so a fold survives edits.
 	collapsed map[target]bool
@@ -207,6 +210,14 @@ type model struct {
 
 func newModel(ctx context.Context, store *task.Store, goals *goallink.Reader) *model {
 	return &model{ctx: ctx, store: store, goals: goals, now: time.Now, width: 100, height: 30, goalLabels: map[int64][]goallink.Goal{}, collapsed: map[target]bool{}}
+}
+
+// afterWrite is reload for after a store write: it also notes that the
+// database has changed, so the backup on quit knows there is something
+// new to keep.
+func (m *model) afterWrite() error {
+	m.changed = true
+	return m.reload()
 }
 
 // reload fetches the tree and rebuilds the rows, keeping the cursor on the
@@ -560,7 +571,7 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	m.form = nil
 	// A project's goal links may have changed; look them up afresh.
 	delete(m.goalLabels, t.id)
-	if err := m.reload(); err != nil {
+	if err := m.afterWrite(); err != nil {
 		m.err = err
 		return m, nil
 	}
@@ -1048,7 +1059,7 @@ func (m *model) advance() {
 		m.setProjectState(r.project.Project.ID, next)
 		return
 	}
-	m.err = m.reload()
+	m.err = m.afterWrite()
 }
 
 func (m *model) setProjectState(id int64, next task.State) {
@@ -1060,7 +1071,7 @@ func (m *model) setProjectState(id int64, next task.State) {
 	if next != task.Active {
 		m.status += m.hiddenHint("finished")
 	}
-	m.err = m.reload()
+	m.err = m.afterWrite()
 }
 
 func nextState(s task.State) task.State {
@@ -1124,7 +1135,7 @@ func (m *model) drop() {
 		m.status = "subtasks are ticked with space, or deleted with d"
 		return
 	}
-	m.err = m.reload()
+	m.err = m.afterWrite()
 }
 
 // archive is z: a finished task is put away, out of the tree, and an
@@ -1168,7 +1179,7 @@ func (m *model) archive() {
 		}
 		m.status = fmt.Sprintf("task #%d archived", t.ID) + m.hiddenHint("archived")
 	}
-	m.err = m.reload()
+	m.err = m.afterWrite()
 }
 
 // finishedHint follows a task being done or dropped: it stays listed
@@ -1210,7 +1221,7 @@ func (m *model) updateConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.status = fmt.Sprintf("deleted %s", r.target().label())
-		m.err = m.reload()
+		m.err = m.afterWrite()
 	default:
 		m.status = "kept"
 	}

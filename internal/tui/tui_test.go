@@ -1203,6 +1203,57 @@ func TestLongDetailIsCutWithAMark(t *testing.T) {
 	}
 }
 
+// TestChangedTracksWrites checks that the model knows whether the
+// database changed while it was open, which is what the backup on quit
+// goes by: every write sets it, and looking around does not.
+func TestChangedTracksWrites(t *testing.T) {
+	after := func(keys ...string) (changed bool, status string) {
+		t.Helper()
+		m, _ := setup(t, nil)
+		press(m, keys...)
+		if m.err != nil {
+			t.Fatalf("%v: %v", keys, m.err)
+		}
+		return m.changed, m.status
+	}
+	// Each sequence ends on a status that shows it reached the path it
+	// is for.
+	unchanged := []struct {
+		keys   []string
+		status string
+	}{
+		{[]string{"j", "k", "G", "g", "v", "v", "f", "f", "r", "left", "right"}, "expanded house"},
+		{[]string{"j", "z"}, "task #1 is still todo"}, // an open task cannot be archived: nothing written
+		{[]string{"j", "d", "n"}, "kept"},             // delete declined
+		{[]string{"space", "n"}, "kept"},              // finishing a project declined
+		{[]string{"j", "e", "esc"}, "cancelled"},      // form cancelled
+		{[]string{"j", "a", "x", "esc"}, "cancelled"}, // add cancelled with text typed
+	}
+	for _, c := range unchanged {
+		changed, status := after(c.keys...)
+		if changed || !strings.HasPrefix(status, c.status) {
+			t.Errorf("%v: changed=%v status=%q, want unchanged and %q", c.keys, changed, status, c.status)
+		}
+	}
+	changed := [][]string{
+		{"j", "space"},      // task todo -> doing
+		{"j", "j", "space"}, // subtask ticked
+		{"j", "x"},          // task dropped
+		{"j", "x", "z"},     // then archived
+		{"j", "d", "y"},     // task deleted
+		{"space", "y"},      // project done
+		{"x"},               // project shelved
+		{"j", "e", "enter", "enter", "enter", "enter", "enter", "enter"}, // edit saved, even unchanged
+		{"G", "a", "x", "enter", "enter", "enter", "enter", "enter"},     // task added
+		{"j", "s", "x", "enter"}, // subtask added
+	}
+	for _, keys := range changed {
+		if ok, status := after(keys...); !ok {
+			t.Errorf("%v did not mark the session changed: status=%q", keys, status)
+		}
+	}
+}
+
 // TestUnrecognisedIssue covers a stored issue that ParseIssue did not
 // write, as from a hand-edited database: the detail pane shows it without
 // its control characters, and the edit form keeps it and saves the other

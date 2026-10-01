@@ -112,18 +112,34 @@ func runBackup(cmd *cobra.Command, store *task.Store, dbPath string, b config.Ba
 	if !b.Git {
 		return nil
 	}
-	err = backup.Push(cmd.Context(), b.Dir, time.Now())
+	return pushBackup(cmd, b)
+}
+
+// pushBackup commits and pushes the backup file in the data repo, and
+// says so on stdout when there was something to push. A push that fails
+// is a warning, not an error: the commit is safe locally, and every
+// later run, including a quit that changed nothing, pushes it.
+func pushBackup(cmd *cobra.Command, b config.Backup) error {
+	pushed, err := backup.Push(cmd.Context(), b.Dir, time.Now())
 	switch {
 	case err == nil:
-		fmt.Fprintln(cmd.OutOrStdout(), "backup: pushed")
+		if pushed {
+			fmt.Fprintln(cmd.OutOrStdout(), "backup: pushed")
+		}
 		return nil
 	case errors.Is(err, backup.ErrPushFailed):
-		// The backup and its commit are safe locally; the next run retries.
 		fmt.Fprintf(cmd.ErrOrStderr(), "backup: committed locally but not pushed; will retry next time. %v\n", err)
 		return nil
 	default:
 		return fmt.Errorf("backup git: %w", err)
 	}
+}
+
+// hasBackup reports whether a backup has been written to dir, which is
+// when there can be a commit waiting to be pushed.
+func hasBackup(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, backup.FileName))
+	return err == nil
 }
 
 func restoreCmd(dbPath, cfgPath *string) *cobra.Command {

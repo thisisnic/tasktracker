@@ -39,7 +39,7 @@ func TestPushGivesUpOnHungRemote(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	start := time.Now()
-	err := Push(ctx, e.opts.Dir, now)
+	_, err := Push(ctx, e.opts.Dir, now)
 	took := time.Since(start)
 	if !errors.Is(err, ErrPushFailed) || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("err = %v, want a timed-out ErrPushFailed", err)
@@ -103,7 +103,7 @@ func TestPushExpiringDuringCommitIsCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	err := Push(ctx, e.opts.Dir, now)
+	_, err := Push(ctx, e.opts.Dir, now)
 	if !errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrPushFailed) {
 		t.Errorf("Push expiring during commit: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestPushExpiringDuringCommitIsCancellation(t *testing.T) {
 	}
 	// A later run, with time to spare, commits and pushes it.
 	os.Remove(hook)
-	if err := Push(context.Background(), e.opts.Dir, now); err != nil {
+	if _, err := Push(context.Background(), e.opts.Dir, now); err != nil {
 		t.Errorf("retry after cancellation: %v", err)
 	}
 }
@@ -131,7 +131,7 @@ func TestPushExpiringAfterCommitIsPushFailure(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	err := Push(ctx, e.opts.Dir, now)
+	_, err := Push(ctx, e.opts.Dir, now)
 	if !errors.Is(err, ErrPushFailed) || !strings.Contains(err.Error(), "committed, but") {
 		t.Errorf("Push expiring after commit: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestPushExpiringAfterCommitIsPushFailure(t *testing.T) {
 		t.Error("HEAD did not move; the commit did not land")
 	}
 	os.Remove(hook)
-	if err := Push(context.Background(), e.opts.Dir, now); err != nil {
+	if _, err := Push(context.Background(), e.opts.Dir, now); err != nil {
 		t.Errorf("retry: %v", err)
 	}
 	if !strings.Contains(remoteLog(t, remote), "tasktracker backup") {
@@ -168,7 +168,7 @@ func TestCancelKillsChildThatIgnoresTerm(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	if err := Push(ctx, e.opts.Dir, now); err == nil {
+	if _, err := Push(ctx, e.opts.Dir, now); err == nil {
 		t.Fatal("cancelled push succeeded")
 	}
 	raw, err := os.ReadFile(pidFile)
