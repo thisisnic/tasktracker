@@ -31,14 +31,32 @@ Every commit is reviewed by roborev from a post-commit hook. The loop is:
 2. `roborev wait <sha>` then `roborev show <sha>`.
 3. Fix each finding, amend, and repeat until "No issues found".
 
+The hook only fires for a plain commit. An amended or rebased commit
+gets no review on its own, so queue one: `roborev review <sha>`. With
+several unpushed commits, put a fix in the commit it belongs to with
+`git commit --fixup=<sha>` and
+`GIT_SEQUENCE_EDITOR=true git rebase -i --autosquash <sha>^`, then
+review every rewritten sha. The TUI suite takes about 40 s.
+
 Docs move with the code in the same commit: the README key list, feature
-notes and commands table, and docs/design/tasks.md. Design notes are
+notes and commands table, the root command's help text in
+`internal/cli/root.go`, and docs/design/tasks.md. Design notes are
 written as decisions and reasons, not as quoted conversation. Example
 names are neutral ("home", "garden", "maintenance"); nothing from anyone's
 workplace goes into docs, help text, comments or fixtures.
 
 Releases are cut by tagging `vX.Y.Z` and pushing the tag. A behaviour
 change bumps the minor version.
+
+## What the owner wants
+
+- A new attribute on a task, project or area is a field in that thing's
+  existing form, edited like the others. Not a key of its own, not an
+  editor of its own, nothing on the help line.
+- Build what was asked for. Do not copy a goaltracker TUI feature
+  across because it is there; only the shared plumbing packages are
+  kept in step. Do not add ways out to other programs, such as an
+  `$EDITOR` hook.
 
 ## Smoke testing
 
@@ -70,8 +88,9 @@ committing rather than after.
   open at once, so check-then-write in the store is a race. Archiving
   checks status inside the UPDATE; copying reads the original inside the
   transaction and copies subtasks with INSERT..SELECT.
-- **No dead or untested paths.** Unused edit fields, dead assignments and
-  unreachable fallbacks get flagged. Remove them or test them.
+- **No dead or untested paths.** Unused edit fields, unused parameters,
+  dead assignments and unreachable fallbacks get flagged. Remove them or
+  test them.
 - **One traversal helper, not copies.** Walk the tree with `eachTask`,
   look things up with `findTask`, order by due with `sooner`. If a new
   loop looks like one of these, use the helper.
@@ -80,7 +99,12 @@ committing rather than after.
 - **Tests.** A fresh struct per `json.Unmarshal` (omitempty keeps old
   values). A test's comment must match what it asserts. Mutually
   exclusive flags are declared with `MarkFlagsMutuallyExclusive` and
-  the rejection is tested.
+  the rejection is tested. A check that something did *not* happen must
+  also prove the path was reached: assert the exact status it ends on,
+  not a prefix, and the exact cursor target, not just its kind.
+- **Messages that accumulate.** Anything appended to the status line by
+  a timer or a repeat must be added once, and must not wipe the last
+  action's message or error. Timers clear only their own errors.
 - **Migrations only add columns.** `migrate()` never rewrites data; a
   new column gets a default that leaves existing rows meaning what they
   meant before.
