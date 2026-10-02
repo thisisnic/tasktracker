@@ -21,7 +21,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/mod/module"
 	"golang.org/x/mod/semver"
 )
 
@@ -65,20 +64,11 @@ const (
 var ErrNotRelease = errors.New("not a release build")
 
 // compare works out State from two version strings. Build metadata such
-// as +dirty is ignored, as semver says it should be. A pseudo-version
-// with no tag behind it (v0.0.0-<time>-<hash>, from a checkout that can
-// see no tags) is a dev build, not an old release, so it is Unknown.
+// as +dirty is ignored, as semver says it should be.
 func compare(current, latest string) State {
 	c, l := "v"+strings.TrimPrefix(current, "v"), "v"+strings.TrimPrefix(latest, "v")
-	if !semver.IsValid(c) || !semver.IsValid(l) {
+	if !isRelease(c) || !semver.IsValid(l) {
 		return Unknown
-	}
-	if module.IsPseudoVersion(c) {
-		// An empty base means no tag lies behind the version. An error
-		// covers the same with build metadata attached, such as +dirty.
-		if base, err := module.PseudoVersionBase(c); err != nil || base == "" {
-			return Unknown
-		}
 	}
 	switch semver.Compare(c, l) {
 	case -1:

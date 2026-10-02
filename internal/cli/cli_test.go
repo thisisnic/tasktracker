@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/thisisnic/tasktracker/internal/config"
 	"github.com/thisisnic/tasktracker/internal/task"
 	"github.com/thisisnic/tasktracker/internal/update"
@@ -26,6 +27,8 @@ import (
 type runner struct {
 	t  *testing.T
 	db string
+	// start is given to New: the release check, when a test wants one.
+	start func(context.Context) func() string
 }
 
 func newRunner(t *testing.T) *runner {
@@ -54,7 +57,7 @@ func (r *runner) run(stdin string, wantErr bool, args ...string) string {
 // error text comes back in the second value.
 func (r *runner) runBoth(stdin string, wantErr bool, args ...string) (string, string) {
 	r.t.Helper()
-	root := New()
+	root := New(r.start)
 	var out, errOut bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&errOut)
@@ -624,7 +627,7 @@ func newKey(t *testing.T, r *runner, path string) (recipient string) {
 // quit runs afterQuit as the TUI command would on the way out, and
 // returns what it printed.
 func quit(store *task.Store, db string, cfg config.Config, cfgErr error, changed bool) (string, error) {
-	cmd := New()
+	cmd := New(nil)
 	cmd.SetContext(context.Background())
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
@@ -886,7 +889,7 @@ func TestDefaultPathOwnsItsDirectory(t *testing.T) {
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	root := New()
+	root := New(nil)
 	root.SetOut(&bytes.Buffer{})
 	root.SetArgs([]string{"project", "list"}) // default --db
 	if err := root.Execute(); err != nil {
@@ -912,7 +915,7 @@ func TestEnvPathDoesNotOwnItsDirectory(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("TASKTRACKER_DB", filepath.Join(docs, "tasks.db"))
-	root := New()
+	root := New(nil)
 	root.SetOut(&bytes.Buffer{})
 	root.SetArgs([]string{"project", "list"})
 	if err := root.Execute(); err != nil {
@@ -966,5 +969,56 @@ func TestUpdateMessages(t *testing.T) {
 	version.Version = "0.2.0"
 	if out := r.run("", false, "update"); !strings.Contains(out, "already the latest") {
 		t.Errorf("update when current: %q", out)
+	}
+}
+
+func TestUpdateNotice(t *testing.T) {
+	r := newRunner(t)
+	old := version.Version
+	t.Cleanup(func() { version.Version = old })
+	version.Version = "v0.3.0"
+	started := 0
+	r.start = func(context.Context) func() string {
+		started++
+		return func() string { return "0.4.0" }
+	}
+
+	const notice = "tasktracker 0.4.0 is out; this is 0.3.0. Run tasktracker update to install it.\n"
+	if out, errOut := r.runBoth("", false, "version"); out != "tasktracker v0.3.0\n" || errOut != notice {
+		t.Errorf("version: stdout %q stderr %q", out, errOut)
+	}
+	// On stderr, so --json on stdout stays clean.
+	out, errOut := r.runBoth("", false, "project", "list", "--json")
+	if strings.TrimSpace(out) != "[]" || errOut != notice {
+		t.Errorf("project list --json: stdout %q stderr %q", out, errOut)
+	}
+	if started != 2 {
+		t.Fatalf("check started %d times for two commands", started)
+	}
+	// A command that failed gets no notice: its error is what wants reading.
+	if _, errOut := r.runBoth("", true, "task", "show", "99"); strings.Contains(errOut, "is out") {
+		t.Errorf("notice after a failed command: %q", errOut)
+	}
+	// Nothing newer, nothing said.
+	r.start = func(context.Context) func() string { return func() string { return "" } }
+	if _, errOut := r.runBoth("", false, "version"); errOut != "" {
+		t.Errorf("notice with nothing newer: %q", errOut)
+	}
+	// The update command asks GitHub itself, and shell completion is read
+	// by the shell: neither starts a check, and neither waits on one.
+	r.start = func(context.Context) func() string {
+		t.Error("check started")
+		return func() string { return "0.4.0" }
+	}
+	fakeLatest(t, "v0.4.0")
+	if out, errOut := r.runBoth("", false, "update", "--check"); !strings.Contains(out, "update available: 0.3.0 -> 0.4.0") || errOut != "" {
+		t.Errorf("update --check: stdout %q stderr %q", out, errOut)
+	}
+	// cobra's own completion writes its directive to stderr; the notice
+	// must not join it.
+	for _, args := range [][]string{{cobra.ShellCompRequestCmd, "task", ""}, {cobra.ShellCompNoDescRequestCmd, "task", ""}, {"completion", "bash"}} {
+		if _, errOut := r.runBoth("", false, args...); strings.Contains(errOut, "is out") {
+			t.Errorf("%v: stderr %q", args, errOut)
+		}
 	}
 }

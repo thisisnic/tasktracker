@@ -255,6 +255,45 @@ so in one line.
   commands. Before the first backup there is no repo to push from, so
   nothing is tried.
 
+## Update notices
+
+`tasktracker update` installs the latest release, but nobody runs it
+without a reason, so releases sat uninstalled. Every run now checks, in
+both the CLI and the UI, and says when a newer release is out.
+
+- One answer a day. The check asks GitHub for the latest release at most
+  once in twenty-four hours and keeps the answer in the user's cache
+  directory, so every run can say whether a newer release is out without
+  a network call. The notice is therefore shown on every run until the
+  update is installed, which is the point: a notice that comes once is
+  missed.
+- The check starts once the command to run is known and runs in the
+  background, so the command's own work overlaps it. A command waits for
+  the answer only at its end, and only on the day's one run that goes to
+  the network; the network call has a five second bound, so that is the
+  most a command is ever delayed. Shell completion is read by the shell,
+  not a person, and must never wait on the network, and the update
+  command asks GitHub itself, so neither starts a check.
+- The CLI says it on stderr, after the command's output, so `--json` on
+  stdout stays clean and the notice is the last thing on the screen. A
+  command that failed says nothing: its error is what wants reading, and
+  the next command that works carries the notice.
+- The UI puts the notice in the title line, not the status line. The
+  status line is for the last action and is overwritten by the next; the
+  title line stays, and is the one place the UI can say something for a
+  whole session without getting in the way. On a narrow terminal the
+  title is cut from the right, so the notice goes last and the view's
+  name is kept.
+- A build that is not a release has nothing to compare with, so it is
+  not checked and nothing is fetched. A pseudo-version after a tag, as
+  `go install @main` gives, is a build from main, and is compared like
+  any other.
+- Trouble is not reported. A check that cannot reach GitHub keeps the
+  last answer and tries again an hour later rather than in a day, so a
+  release is not missed over a moment offline and an afternoon offline
+  does not cost every command a five second wait. `tasktracker update
+  --check` is there for anyone who wants to know what went wrong.
+
 ## Open questions
 
 1. **Day to day.** What to see first when opening the app. The tree opens

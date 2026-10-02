@@ -11,8 +11,9 @@ import (
 )
 
 // runTUI is what the bare command does: open the terminal UI, then back
-// up on the way out if the config asks for it.
-func runTUI(cmd *cobra.Command, dbPath, cfgPath string) error {
+// up on the way out if the config asks for it. newer is the background
+// check for a newer release, for the UI's title line.
+func runTUI(cmd *cobra.Command, dbPath, cfgPath string, newer func() string) error {
 	// The config only affects backups and the goal lookup, so a broken one
 	// must not keep the UI from opening. It is reported on exit instead,
 	// once: the goal reader falls back quietly rather than printing a
@@ -24,7 +25,7 @@ func runTUI(cmd *cobra.Command, dbPath, cfgPath string) error {
 		return err
 	}
 	defer store.Close()
-	changed, err := tui.Run(cmd.Context(), store, tui.Options{Goals: goals, Folds: tui.FoldsPath(dbPath)})
+	changed, err := tui.Run(cmd.Context(), store, tui.Options{Goals: goals, Folds: tui.FoldsPath(dbPath), Newer: newer})
 	if err != nil {
 		return err
 	}

@@ -134,6 +134,8 @@ tasktracker task list --due --json
   with `--db` or `TASKTRACKER_DB`.
 - **Self-updating** - `tasktracker update` fetches the latest release,
   verifies it against the published checksums, and swaps the binary in place.
+  Once a day tasktracker asks GitHub what the latest release is; while a
+  newer one is out, every command says so and the UI's title line shows it.
 
 ## Goal Links
 
@@ -211,6 +213,18 @@ tasktracker version           # what you have
 tasktracker update --check    # is there a newer release?
 tasktracker update            # install it
 ```
+
+You do not need to ask. Once a day, the first command you run asks GitHub
+for the latest release and keeps the answer in
+`~/.cache/tasktracker/latest-release.json` (or under `$XDG_CACHE_HOME`).
+While a newer release is out, every command that works ends with a line
+on stderr saying so, and the UI shows it in its title line until you
+update. A
+build that is not a release, such as one from a checkout, is not
+compared and nothing is asked. If GitHub cannot be reached the last
+answer stands and the next run an hour later tries again; nothing is
+reported, since `tasktracker update --check` is there to say what is
+wrong.
 
 ## Commands
 

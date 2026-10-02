@@ -2393,3 +2393,41 @@ func TestDeleteArea(t *testing.T) {
 		t.Errorf("rows after the delete: %v", got)
 	}
 }
+
+func TestNewerReleaseInTitleLine(t *testing.T) {
+	m, _ := setup(t, nil)
+	if awaitNewer(nil) != nil {
+		t.Error("a command to wait for a check that does not exist")
+	}
+	msg := awaitNewer(func() string { return "0.4.0" })()
+	if msg != newerMsg("0.4.0") {
+		t.Fatalf("awaitNewer delivered %#v", msg)
+	}
+	const notice = "0.4.0 is out: quit and run tasktracker update"
+	if strings.Contains(plain(m), notice) {
+		t.Fatal("notice shown before the check answered")
+	}
+	m.Update(newerMsg(""))
+	if strings.Contains(plain(m), "is out") {
+		t.Error("notice shown when nothing is newer")
+	}
+	m.Update(msg)
+	title := strings.SplitN(plain(m), "\n", 2)[0]
+	if !strings.Contains(title, "tasktracker · by project · "+notice) {
+		t.Errorf("title line = %q, want the notice after the view's name", title)
+	}
+	// It stays through the views and modes, and the status line is not
+	// where it lives.
+	press(m, "v")
+	if title := strings.SplitN(plain(m), "\n", 2)[0]; !strings.Contains(title, "by deadline · "+notice) {
+		t.Errorf("title line by deadline = %q", title)
+	}
+	if m.status != "by deadline: open tasks under overdue, next 7 days, next 30 days, longer, no deadline" {
+		t.Errorf("status = %q; the notice must leave it alone", m.status)
+	}
+	// Narrow terminals cut the notice before the view's name.
+	m.Update(tea.WindowSizeMsg{Width: 30, Height: 30})
+	if title := strings.SplitN(plain(m), "\n", 2)[0]; !strings.HasPrefix(title, "tasktracker · by deadline") || strings.Contains(title, "tasktracker update") {
+		t.Errorf("narrow title line = %q", title)
+	}
+}

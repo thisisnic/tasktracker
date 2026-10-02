@@ -36,6 +36,10 @@ type Options struct {
 	// Folds is the file the folds are kept in between sessions, as
 	// FoldsPath gives it. Empty means folds last only until the UI quits.
 	Folds string
+	// Newer waits for the check for a newer release and returns its
+	// version, or "" when there is none; it is update.Start's Wait. The
+	// title line says so while one is out. Nil means no check.
+	Newer func() string
 }
 
 // Run opens the by-project view and blocks until the user quits. It
@@ -46,6 +50,7 @@ func Run(ctx context.Context, store *task.Store, opts Options) (changed bool, er
 	m := newModel(ctx, store, opts.Goals)
 	m.showAll = opts.ShowFinished
 	m.foldsPath = opts.Folds
+	m.newerCheck = opts.Newer
 	// A folds file that cannot be read is not worth keeping the UI shut
 	// for: what could be read is used, and the trouble is on the status
 	// line until a key is pressed.
@@ -102,6 +107,20 @@ type pollMsg struct{}
 
 func poll() tea.Cmd {
 	return tea.Tick(pollEvery, func(time.Time) tea.Msg { return pollMsg{} })
+}
+
+// newerMsg carries the release check's answer: a version newer than the
+// running build, or "" when there is none.
+type newerMsg string
+
+// awaitNewer waits for the release check in the background and delivers
+// its answer. The check is bounded by its own timeout, so the UI is never
+// kept waiting by it; without a check there is nothing to wait for.
+func awaitNewer(check func() string) tea.Cmd {
+	if check == nil {
+		return nil
+	}
+	return func() tea.Msg { return newerMsg(check()) }
 }
 
 // rowKind says what a row in the left pane stands for.
@@ -242,6 +261,9 @@ type model struct {
 	foldMade  map[target]string
 	foldsPath string
 	foldsErr  error // the last save of the folds failed; shown until a key or a save that works
+
+	newerCheck func() string // waits for the release check, when there is one
+	newer      string        // a release newer than this build, for the title line
 
 	// goal labels for the selected project, looked up once per project id
 	goalLabels map[int64][]goallink.Goal
@@ -607,7 +629,7 @@ func (m *model) projectGoals(p task.Project) []goallink.Goal {
 	return goals
 }
 
-func (m *model) Init() tea.Cmd { return poll() }
+func (m *model) Init() tea.Cmd { return tea.Batch(poll(), awaitNewer(m.newerCheck)) }
 
 // Update handles a message, then notes on the status line any change
 // from elsewhere that the handling took in: a poll finds one on purpose,
@@ -636,6 +658,9 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case pollMsg:
 		m.poll()
 		return m, poll()
+	case newerMsg:
+		m.newer = string(msg)
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		if m.mode == modeForm && m.form != nil {
@@ -1454,6 +1479,10 @@ func (m *model) View() tea.View {
 	head := titleStyle.Render("tasktracker · " + m.view.String())
 	if m.showAll {
 		head += dimStyle.Render(" · showing archived")
+	}
+	if m.newer != "" {
+		// Last, so a narrow terminal cuts it before the view's name.
+		head += dimStyle.Render(" · " + m.newer + " is out: quit and run tasktracker update")
 	}
 	b.WriteString(ansi.Truncate(head, max(10, m.width), "…"))
 	b.WriteString("\n")

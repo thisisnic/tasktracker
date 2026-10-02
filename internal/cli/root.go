@@ -16,6 +16,7 @@ import (
 	"github.com/thisisnic/tasktracker/internal/config"
 	"github.com/thisisnic/tasktracker/internal/goallink"
 	"github.com/thisisnic/tasktracker/internal/task"
+	"github.com/thisisnic/tasktracker/internal/update"
 	"github.com/thisisnic/tasktracker/internal/version"
 )
 
@@ -43,9 +44,15 @@ func dataDirDBPath() string {
 	return filepath.Join(base, "tasktracker", "tasktracker.db")
 }
 
-// New builds the root command.
-func New() *cobra.Command {
+// New builds the root command. start begins the check for a newer
+// release and returns a function that waits for its answer; Execute
+// passes update.Start. Nil means no check, which is what tests want.
+func New(start func(context.Context) func() string) *cobra.Command {
 	var dbPath, cfgPath string
+	// newer waits for the release check once one has started. The TUI
+	// shows its answer in its title line, and the root's post-run hook
+	// says it after every other command.
+	newer := func() string { return "" }
 	root := &cobra.Command{
 		Use:   "tasktracker",
 		Short: "A personal tracker for projects, tasks and subtasks",
@@ -62,12 +69,32 @@ config if it is not in the usual place.
 
 Backups are encrypted snapshots written to a folder you choose. Run
 tasktracker key new once to set that up; with on_quit set in the config the
-TUI writes one when it exits, unless nothing changed while it was open.`,
+TUI writes one when it exits, unless nothing changed while it was open.
+
+Once a day tasktracker asks GitHub for the latest release. While a newer one
+is out, every command says so on stderr and the TUI says so in its title
+line; tasktracker update installs it.`,
 		Version:       version.String(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTUI(cmd, dbPath, cfgPath)
+			return runTUI(cmd, dbPath, cfgPath, newer)
+		},
+		// The check starts once the command to run is known, so that shell
+		// completion, which is read by the shell and must not touch the
+		// network, and the update command, which asks GitHub itself, start
+		// none. It runs in the background from there, so the command's
+		// own work overlaps the network call.
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			if start != nil && !isCompletion(cmd) && cmd.Name() != "update" {
+				newer = start(cmd.Context())
+			}
+		},
+		// After the command's output, so the notice is the last thing on
+		// the screen. A command that failed gets no hook and no notice:
+		// its error is what wants reading.
+		PersistentPostRun: func(cmd *cobra.Command, args []string) {
+			updateNotice(cmd.ErrOrStderr(), newer)
 		},
 	}
 	root.PersistentFlags().StringVar(&dbPath, "db", DefaultDBPath(), "path to the SQLite database (env TASKTRACKER_DB)")
@@ -114,11 +141,36 @@ func goalsFor(cfg config.Config, err error) *goallink.Reader {
 
 // Execute runs the root command and exits non-zero on error.
 func Execute() {
-	root := New()
+	root := New(func(ctx context.Context) func() string {
+		return update.Start(ctx, update.CachePath(), version.String()).Wait
+	})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		fmt.Fprintln(os.Stderr, "tasktracker:", err)
 		os.Exit(1)
 	}
+}
+
+// updateNotice writes one line to w when newer, the wait on the release
+// check, answers with a release newer than the one running. The wait is
+// bounded by the check's own timeout.
+func updateNotice(w io.Writer, newer func() string) {
+	if latest := newer(); latest != "" {
+		fmt.Fprintf(w, "tasktracker %s is out; this is %s. Run tasktracker update to install it.\n", latest, strings.TrimPrefix(version.String(), "v"))
+	}
+}
+
+// isCompletion reports whether cmd is cobra's shell completion: the
+// hidden command a shell calls for each Tab (__completeNoDesc is an
+// alias of it, with the same name), or the completion command and its
+// subcommands that print the scripts.
+func isCompletion(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		switch c.Name() {
+		case cobra.ShellCompRequestCmd, "completion":
+			return true
+		}
+	}
+	return false
 }
 
 func parseID(what, s string) (int64, error) {

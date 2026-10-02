@@ -15,8 +15,11 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // fakeRelease serves a GitHub-shaped latest release with one archive per
@@ -295,5 +298,187 @@ func TestReadCappedFailsOverLimit(t *testing.T) {
 	}
 	if _, err := readCapped(strings.NewReader("123456789"), "x"); err == nil || !strings.Contains(err.Error(), "larger than") {
 		t.Errorf("over the limit: err = %v, want an error", err)
+	}
+}
+
+// fakeLatestOnly serves a latest release with no assets, counting the
+// requests, and answers with status when it is not 200.
+func fakeLatestOnly(t *testing.T, tag string, status int) *atomic.Int32 {
+	t.Helper()
+	hits := new(atomic.Int32)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		fmt.Fprintf(w, `{"tag_name":%q,"assets":[]}`, tag)
+	}))
+	t.Cleanup(srv.Close)
+	old := APIBase
+	APIBase = srv.URL
+	t.Cleanup(func() { APIBase = old })
+	return hits
+}
+
+func readCached(t *testing.T, path string) cached {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c cached
+	if err := json.Unmarshal(data, &c); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func writeCached(t *testing.T, path string, c cached) {
+	t.Helper()
+	data, err := json.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAvailableFetchesAndCaches(t *testing.T) {
+	hits := fakeLatestOnly(t, "v0.2.0", http.StatusOK)
+	// The directory does not exist yet: the first check makes it.
+	path := filepath.Join(t.TempDir(), "cache", "latest-release.json")
+	ctx := context.Background()
+
+	if got := Available(ctx, path, "v0.1.0"); got != "0.2.0" {
+		t.Fatalf("first check = %q, want 0.2.0", got)
+	}
+	c := readCached(t, path)
+	if c.Latest != "0.2.0" || time.Until(c.Next) < Interval-time.Minute || time.Until(c.Next) > Interval {
+		t.Errorf("cache after check = %+v", c)
+	}
+	// Within the interval the file answers and GitHub is left alone,
+	// whatever the running version.
+	if got := Available(ctx, path, "0.1.5"); got != "0.2.0" {
+		t.Errorf("cached check = %q, want 0.2.0", got)
+	}
+	if got := Available(ctx, path, "0.2.0"); got != "" {
+		t.Errorf("current build = %q, want nothing", got)
+	}
+	if got := Available(ctx, path, "0.3.0"); got != "" {
+		t.Errorf("build ahead of the release = %q, want nothing", got)
+	}
+	if hits.Load() != 1 {
+		t.Errorf("GitHub asked %d times, want once", hits.Load())
+	}
+}
+
+func TestAvailableSkipsDevBuilds(t *testing.T) {
+	hits := fakeLatestOnly(t, "v0.2.0", http.StatusOK)
+	path := filepath.Join(t.TempDir(), "latest-release.json")
+	for _, current := range []string{"dev", "(devel)", "v0.0.0-20260910120000-abcdef123456", "v0.0.0-20260910120000-abcdef123456+dirty", ""} {
+		if got := Available(context.Background(), path, current); got != "" {
+			t.Errorf("%q: %q, want nothing", current, got)
+		}
+	}
+	if hits.Load() != 0 {
+		t.Errorf("GitHub asked %d times for dev builds, want none", hits.Load())
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("cache written for a dev build: %v", err)
+	}
+	// A pseudo-version after a tag is a build from main, compared like any
+	// other.
+	if got := Available(context.Background(), path, "v0.1.1-0.20260910120000-abcdef123456"); got != "0.2.0" || hits.Load() != 1 {
+		t.Errorf("pseudo-version after a tag: %q, %d hits", got, hits.Load())
+	}
+	// No cache directory means no check at all.
+	if got := Available(context.Background(), "", "0.1.0"); got != "" || hits.Load() != 1 {
+		t.Errorf("empty cache path: %q, %d hits", got, hits.Load())
+	}
+}
+
+func TestAvailableKeepsLastAnswerWhenOffline(t *testing.T) {
+	hits := fakeLatestOnly(t, "", http.StatusInternalServerError)
+	path := filepath.Join(t.TempDir(), "latest-release.json")
+	// A check that is due, with an answer from an earlier one.
+	writeCached(t, path, cached{Next: time.Now().Add(-time.Minute), Latest: "0.2.0"})
+
+	if got := Available(context.Background(), path, "0.1.0"); got != "0.2.0" {
+		t.Errorf("offline with a cached answer = %q, want 0.2.0", got)
+	}
+	c := readCached(t, path)
+	if c.Latest != "0.2.0" {
+		t.Errorf("cached answer lost: %+v", c)
+	}
+	if until := time.Until(c.Next); until < retryAfter-time.Minute || until > retryAfter {
+		t.Errorf("next try in %v, want about %v", until, retryAfter)
+	}
+	if got := Available(context.Background(), path, "0.1.0"); got != "0.2.0" || hits.Load() != 1 {
+		t.Errorf("before the retry: %q, %d hits; want the cached answer and no new request", got, hits.Load())
+	}
+
+	// No answer at all yet: nothing to say, and the retry is still set.
+	empty := filepath.Join(t.TempDir(), "latest-release.json")
+	if got := Available(context.Background(), empty, "0.1.0"); got != "" {
+		t.Errorf("offline with no cache = %q", got)
+	}
+	if c := readCached(t, empty); c.Latest != "" || time.Until(c.Next) > retryAfter {
+		t.Errorf("cache after failed first check = %+v", c)
+	}
+}
+
+func TestAvailableDistrustsNextFarAhead(t *testing.T) {
+	hits := fakeLatestOnly(t, "v0.2.0", http.StatusOK)
+	path := filepath.Join(t.TempDir(), "latest-release.json")
+	// Written by a clock that was years ahead: on its word the check
+	// would never be due again.
+	writeCached(t, path, cached{Next: time.Now().Add(3 * 365 * 24 * time.Hour), Latest: "0.1.0"})
+	if got := Available(context.Background(), path, "0.1.0"); got != "0.2.0" || hits.Load() != 1 {
+		t.Errorf("far-ahead cache: %q, %d hits; want a fresh check", got, hits.Load())
+	}
+	if c := readCached(t, path); c.Latest != "0.2.0" || time.Until(c.Next) > Interval {
+		t.Errorf("cache after the fresh check = %+v", c)
+	}
+}
+
+func TestAvailableIgnoresGarbageCache(t *testing.T) {
+	hits := fakeLatestOnly(t, "v0.2.0", http.StatusOK)
+	path := filepath.Join(t.TempDir(), "latest-release.json")
+	if err := os.WriteFile(path, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := Available(context.Background(), path, "0.1.0"); got != "0.2.0" || hits.Load() != 1 {
+		t.Errorf("garbage cache: %q, %d hits", got, hits.Load())
+	}
+	if c := readCached(t, path); c.Latest != "0.2.0" {
+		t.Errorf("garbage not replaced: %+v", c)
+	}
+	if entries, err := os.ReadDir(filepath.Dir(path)); err != nil || len(entries) != 1 {
+		t.Errorf("cache directory holds %d entries, want only the answer: %v", len(entries), err)
+	}
+}
+
+func TestStartWaitsForTheAnswer(t *testing.T) {
+	fakeLatestOnly(t, "v0.2.0", http.StatusOK)
+	path := filepath.Join(t.TempDir(), "latest-release.json")
+	c := Start(context.Background(), path, "0.1.0")
+	// Wait can be called from more than one place and always answers.
+	if got := c.Wait(); got != "0.2.0" {
+		t.Errorf("Wait = %q", got)
+	}
+	if got := c.Wait(); got != "0.2.0" {
+		t.Errorf("second Wait = %q", got)
+	}
+}
+
+func TestCachePathHonoursXDG(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", "/x")
+	if runtime.GOOS != "linux" {
+		t.Skip("XDG_CACHE_HOME is read on Linux")
+	}
+	if got := CachePath(); got != "/x/tasktracker/latest-release.json" {
+		t.Errorf("CachePath = %q", got)
 	}
 }

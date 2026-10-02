@@ -64,7 +64,8 @@ Only ever on a scratch database:
 
 ```bash
 TASKTRACKER_DB=/tmp/scratch/smoke.db XDG_CONFIG_HOME=/tmp/scratch/cfg \
-  GOALTRACKER_DB=/tmp/scratch/absent.db ./tasktracker
+  XDG_CACHE_HOME=/tmp/scratch/cache GOALTRACKER_DB=/tmp/scratch/absent.db \
+  ./tasktracker
 ```
 
 Never point the binary at real data while testing.
