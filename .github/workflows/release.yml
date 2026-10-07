@@ -17,6 +17,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: oven-sh/setup-bun@v2
       - run: go test ./... -timeout 5m
       - uses: goreleaser/goreleaser-action@v6
         with:

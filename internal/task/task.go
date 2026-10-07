@@ -46,6 +46,43 @@ const (
 // ErrNotFound is returned when a project, task or subtask does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrInvalid is matched by every error about the input itself: a blank
+// name, a date in the wrong form, a state that is not one of the three.
+// Callers that answer over HTTP tell it from a database failure that way.
+var ErrInvalid = errors.New("invalid")
+
+// invalidError is what the store and the parsers return for bad input.
+// It reads as its message alone, so the CLI prints "name is required"
+// rather than "invalid: name is required", and matches ErrInvalid.
+type invalidError struct{ msg string }
+
+func (e invalidError) Error() string        { return e.msg }
+func (e invalidError) Is(target error) bool { return target == ErrInvalid }
+
+func invalid(format string, args ...any) error { return invalidError{fmt.Sprintf(format, args...)} }
+
+// refError is a reference in the input to a project or area that does
+// not exist. It is not found, for a caller that looks for that, and
+// invalid input too, so a caller answering over HTTP can tell "the
+// project you named" from "the task at this address".
+type refError struct {
+	msg string
+	err error
+}
+
+func (e refError) Error() string        { return e.msg }
+func (e refError) Unwrap() error        { return e.err }
+func (e refError) Is(target error) bool { return target == ErrInvalid }
+
+// badRef wraps the error of looking up a referenced id: "project 9: not
+// found" as a refError when it was not found, and plainly otherwise.
+func badRef(what string, id int64, err error) error {
+	if errors.Is(err, ErrNotFound) {
+		return refError{fmt.Sprintf("%s %d: %v", what, id, err), err}
+	}
+	return fmt.Errorf("%s %d: %w", what, id, err)
+}
+
 // Project is a container of tasks with an end state.
 type Project struct {
 	ID          int64     `json:"id"`
@@ -135,7 +172,7 @@ func ParseDue(raw string, today time.Time) (string, error) {
 	}
 	d, err := time.Parse(dueLayout, s)
 	if err != nil {
-		return "", fmt.Errorf("due %q: want YYYY-MM-DD, today, tomorrow or none", raw)
+		return "", invalid("due %q: want YYYY-MM-DD, today, tomorrow or none", raw)
 	}
 	return d.Format(dueLayout), nil
 }
@@ -158,7 +195,7 @@ func ParseIssue(raw string) (string, error) {
 	if s == "" || strings.EqualFold(s, "none") {
 		return "", nil
 	}
-	bad := fmt.Errorf("issue %q: want a GitHub issue URL, owner/repo#N or none", raw)
+	bad := invalid("issue %q: want a GitHub issue URL, owner/repo#N or none", raw)
 	if m := issueShort.FindStringSubmatch(s); m != nil {
 		return issueURL(m[1], m[2], "issues", m[3], bad)
 	}
@@ -232,7 +269,7 @@ func ParseState(s string) (State, error) {
 	case "shelved", "shelve":
 		return Shelved, nil
 	}
-	return "", fmt.Errorf("state %q: want active, done or shelved", s)
+	return "", invalid("state %q: want active, done or shelved", s)
 }
 
 // ParseStatus accepts todo, doing, done or dropped.
@@ -247,7 +284,7 @@ func ParseStatus(s string) (Status, error) {
 	case "dropped", "drop":
 		return Dropped, nil
 	}
-	return "", fmt.Errorf("status %q: want todo, doing, done or dropped", s)
+	return "", invalid("status %q: want todo, doing, done or dropped", s)
 }
 
 // Next is the status after s when stepping through a task's life: todo,
@@ -269,7 +306,7 @@ func NormaliseGoalIDs(ids []int64) ([]int64, error) {
 	var out []int64
 	for _, id := range ids {
 		if id <= 0 {
-			return nil, fmt.Errorf("goal id %d: want a positive integer", id)
+			return nil, invalid("goal id %d: want a positive integer", id)
 		}
 		if !seen[id] {
 			seen[id] = true

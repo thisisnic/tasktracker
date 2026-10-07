@@ -295,7 +295,7 @@ type NewProject struct {
 func (s *Store) AddProject(ctx context.Context, in NewProject) (Project, error) {
 	in.Name = strings.TrimSpace(in.Name)
 	if in.Name == "" {
-		return Project{}, errors.New("name is required")
+		return Project{}, invalid("name is required")
 	}
 	goals, err := NormaliseGoalIDs(in.GoalIDs)
 	if err != nil {
@@ -329,7 +329,7 @@ func (s *Store) checkArea(ctx context.Context, id int64) error {
 		return nil
 	}
 	if _, err := s.GetArea(ctx, id); err != nil {
-		return fmt.Errorf("area %d: %w", id, err)
+		return badRef("area", id, err)
 	}
 	return nil
 }
@@ -473,7 +473,7 @@ func (s *Store) UpdateProject(ctx context.Context, id int64, e ProjectEdit) (Pro
 	if e.Name != nil {
 		v := strings.TrimSpace(*e.Name)
 		if v == "" {
-			return Project{}, errors.New("name is required")
+			return Project{}, invalid("name is required")
 		}
 		p.Name = v
 	}
@@ -518,7 +518,7 @@ func checkState(st State) error {
 	case Active, Done, Shelved:
 		return nil
 	}
-	return fmt.Errorf("state %q: want active, done or shelved", st)
+	return invalid("state %q: want active, done or shelved", st)
 }
 
 func checkStatus(st Status) error {
@@ -526,7 +526,7 @@ func checkStatus(st Status) error {
 	case Todo, Doing, Finished, Dropped:
 		return nil
 	}
-	return fmt.Errorf("status %q: want todo, doing, done or dropped", st)
+	return invalid("status %q: want todo, doing, done or dropped", st)
 }
 
 // MarkProject sets a project's state.
@@ -571,7 +571,7 @@ type NewTask struct {
 func (s *Store) AddTask(ctx context.Context, in NewTask) (Task, error) {
 	in.Title = strings.TrimSpace(in.Title)
 	if in.Title == "" {
-		return Task{}, errors.New("title is required")
+		return Task{}, invalid("title is required")
 	}
 	due, err := ParseDue(in.Due, time.Now())
 	if err != nil {
@@ -582,7 +582,7 @@ func (s *Store) AddTask(ctx context.Context, in NewTask) (Task, error) {
 		return Task{}, err
 	}
 	if _, err := s.GetProject(ctx, in.ProjectID); err != nil {
-		return Task{}, fmt.Errorf("project %d: %w", in.ProjectID, err)
+		return Task{}, badRef("project", in.ProjectID, err)
 	}
 	res, err := s.db.ExecContext(ctx, `INSERT INTO tasks (project_id, title, status, due, issue, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		in.ProjectID, in.Title, string(Todo), due, issue, trimBlankLines(in.Notes), now())
@@ -696,7 +696,7 @@ func (s *Store) UpdateTask(ctx context.Context, id int64, e TaskEdit) (Task, err
 	if e.Title != nil {
 		v := strings.TrimSpace(*e.Title)
 		if v == "" {
-			return Task{}, errors.New("title is required")
+			return Task{}, invalid("title is required")
 		}
 		t.Title = v
 	}
@@ -723,7 +723,7 @@ func (s *Store) UpdateTask(ctx context.Context, id int64, e TaskEdit) (Task, err
 	}
 	if e.ProjectID != nil {
 		if _, err := s.GetProject(ctx, *e.ProjectID); err != nil {
-			return Task{}, fmt.Errorf("project %d: %w", *e.ProjectID, err)
+			return Task{}, badRef("project", *e.ProjectID, err)
 		}
 		t.ProjectID = *e.ProjectID
 	}
@@ -761,14 +761,14 @@ func (s *Store) CopyTask(ctx context.Context, id int64, e TaskEdit) (TaskNode, e
 		}
 	}
 	if e.Title != nil && strings.TrimSpace(*e.Title) == "" {
-		return TaskNode{}, errors.New("title is required")
+		return TaskNode{}, invalid("title is required")
 	}
 	if e.Status != nil {
-		return TaskNode{}, errors.New("a copy always starts as todo")
+		return TaskNode{}, invalid("a copy always starts as todo")
 	}
 	if e.ProjectID != nil {
 		if _, err := s.GetProject(ctx, *e.ProjectID); err != nil {
-			return TaskNode{}, fmt.Errorf("project %d: %w", *e.ProjectID, err)
+			return TaskNode{}, badRef("project", *e.ProjectID, err)
 		}
 	}
 	// The original is read inside the transaction, and its subtasks are
@@ -871,7 +871,7 @@ func (s *Store) ArchiveTask(ctx context.Context, id int64, archived bool) error 
 	if err != nil {
 		return err
 	}
-	return fmt.Errorf("task is still %s; mark it done or dropped first", t.Status)
+	return invalid("task is still %s; mark it done or dropped first", t.Status)
 }
 
 // DeleteTask removes a task and its subtasks.
@@ -892,7 +892,7 @@ func (s *Store) DeleteTask(ctx context.Context, id int64) error {
 func (s *Store) AddSubtask(ctx context.Context, taskID int64, title string) (Subtask, error) {
 	title = strings.TrimSpace(title)
 	if title == "" {
-		return Subtask{}, errors.New("title is required")
+		return Subtask{}, invalid("title is required")
 	}
 	if _, err := s.GetTask(ctx, taskID); err != nil {
 		return Subtask{}, fmt.Errorf("task %d: %w", taskID, err)
@@ -966,7 +966,7 @@ func (s *Store) TickSubtask(ctx context.Context, id int64, done bool) error {
 func (s *Store) RenameSubtask(ctx context.Context, id int64, title string) (Subtask, error) {
 	title = strings.TrimSpace(title)
 	if title == "" {
-		return Subtask{}, errors.New("title is required")
+		return Subtask{}, invalid("title is required")
 	}
 	res, err := s.db.ExecContext(ctx, `UPDATE subtasks SET title = ? WHERE id = ?`, title, id)
 	if err != nil {

@@ -2,6 +2,11 @@ version: 2
 
 project_name: tasktracker
 
+# The web app is built first so the binaries embed it.
+before:
+  hooks:
+    - sh -c "cd web && bun install --frozen-lockfile && bun run build"
+
 builds:
   - id: tasktracker
     main: ./cmd/tasktracker

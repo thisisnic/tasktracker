@@ -7,10 +7,11 @@
 
 **[Releases](https://github.com/thisisnic/tasktracker/releases)** | **[Quick Start](#quick-start)** | **[Backups](#backups)**
 
-A personal task tracker that lives in your terminal and keeps your data on
-your machine. Projects hold tasks, tasks hold checklists, and a project can
-point at the goals it serves in [goaltracker](https://github.com/thisisnic/goaltracker).
-One binary, one SQLite file, no account.
+A personal task tracker that keeps your data on your machine. Projects
+hold tasks, tasks hold checklists, and a project can point at the goals it
+serves in [goaltracker](https://github.com/thisisnic/goaltracker). One
+binary serves a browser UI on a loopback port, opens as a terminal UI, and
+is a CLI with `--json` everywhere. One SQLite file, no account.
 
 ```text
 tasktracker · by project
@@ -55,10 +56,22 @@ The design notes behind this are in
 ## Quick Start
 
 ```bash
-tasktracker                      # open the terminal UI
+tasktracker                      # serve the browser UI on http://127.0.0.1:7344 and open it
+tasktracker tui                  # open the terminal UI instead
 ```
 
-In the UI: `n` add an area, `A` add a project, `a` add a task, `s` add a
+The browser UI and the terminal UI work on the same database at the same
+time, and so does the CLI; each sees what the others change within a
+couple of seconds.
+
+In the browser: the same two panes, rows on the left and the selected
+row's detail on the right, with the actions as buttons under the detail
+and the terminal UI's keys working too. Set `http://127.0.0.1:7344/` as
+your browser's home page and leave `tasktracker --no-open` running, from
+a user service or a terminal you keep open; without the flag each start
+opens a browser tab.
+
+In the terminal UI: `n` add an area, `A` add a project, `a` add a task, `s` add a
 subtask, `c` copy a task, `e` edit, `space` step a task's status or tick a subtask, `x` drop
 a task or shelve a project, `z` archive a finished task or bring it back,
 `d` delete, `f` show archived tasks and finished projects, `v` switch
@@ -93,7 +106,13 @@ tasktracker task list --due --json
 - **Folding** - `←` or `→` on a project hides its tasks, on an area
   hides everything in it, and by deadline hides a heading's tasks, behind
   a `▸` that keeps the count; press it again to show them. Folds are
-  kept between sessions, in a small file next to the database.
+  kept between sessions: the terminal UI's in a small file next to the
+  database, the browser's in the browser's own storage.
+- **Browser UI** - `tasktracker` serves the same tree and the same
+  detail pane on `http://127.0.0.1:7344/`, with the actions as buttons
+  and the keys below working as they do in the terminal. It is served
+  on this machine only. The page follows the database like the terminal
+  UI does, so an agent's changes show up without a reload.
 - **By project or by deadline** - The tree groups tasks under their
   projects. Press `v` for the open tasks as one list under the headings
   Overdue, Next 7 days, Next 30 days, Longer and No deadline, soonest
@@ -123,15 +142,19 @@ tasktracker task list --due --json
   choose, and optionally committed and pushed to your own private git repo
   when the UI exits after changing something.
 - **Agent friendly** - A plain CLI with JSON output, so a coding agent can
-  read and update your tasks without touching the UI.
-- **Keeps up** - The UI checks every couple of seconds whether another
+  read and update your tasks without touching a UI. The browser UI's own
+  JSON API is there too, under `/api/` on the served port; it speaks the
+  same objects `--json` prints.
+- **Keeps up** - Both UIs check every couple of seconds whether another
   process has changed the database, such as an agent on the CLI or a
-  second tasktracker in another terminal, and reloads when one has. A
+  second tasktracker in another terminal, and reload when one has. A
   form or a confirmation that is open is left alone until it closes.
 - **Local and portable** - A single static binary and a single SQLite file
   at `~/.local/share/tasktracker/tasktracker.db` (or under `$XDG_DATA_HOME`),
-  with the UI's folds in `tasktracker.db-folds` beside it. Point elsewhere
-  with `--db` or `TASKTRACKER_DB`.
+  with the terminal UI's folds in `tasktracker.db-folds` beside it. Point
+  elsewhere with `--db` or `TASKTRACKER_DB`. The browser UI is served on
+  127.0.0.1 only, on port 7344 unless the config or `--port` says
+  otherwise; nothing listens on the network.
 - **Self-updating** - `tasktracker update` fetches the latest release,
   verifies it against the published checksums, and swaps the binary in place.
   Once a day tasktracker asks GitHub what the latest release is; while a
@@ -148,6 +171,18 @@ yours is somewhere else, say so in the config:
 ```toml
 [goaltracker]
 db = "~/somewhere/goaltracker.db"
+```
+
+## Configuration
+
+Everything in `~/.config/tasktracker/config.toml` is optional:
+
+```toml
+# The loopback port the browser UI is served on.
+port = 7344
+
+[backup]        # see Backups
+[goaltracker]   # see Goal Links
 ```
 
 ## Backups
@@ -183,9 +218,11 @@ tasktracker backup            # back up now (skipped if unchanged)
 tasktracker restore           # put the backup in place of the database
 ```
 
-With `on_quit` the UI backs up as it closes, unless nothing changed while
+With `on_quit` the terminal UI backs up as it closes, unless nothing changed while
 it was open: a session that only looked prints `backup: nothing changed
-this session` and leaves the backup alone. Changes made by the CLI while
+this session` and leaves the backup alone. The browser UI's server never
+backs up; a change made there is kept by `tasktracker backup` or the next
+terminal session that changes something. Changes made by the CLI while
 no UI is open are kept by the next session that changes something, or by
 running `tasktracker backup`, which always checks the database itself.
 
@@ -199,11 +236,15 @@ as an SSH key in an agent. A failed push is reported and retried next time.
 **Binary (macOS / Linux / Windows):** download the archive for your platform
 from [GitHub Releases](https://github.com/thisisnic/tasktracker/releases),
 check it against `checksums.txt`, and put `tasktracker` on your `PATH`.
+The release binaries have the browser UI built in.
 
-**With Go:**
+**From source:** the browser UI is a Svelte app under `web/` that is built
+into the binary, so a plain `go install` gives a binary that serves only a
+notice in place of the page. With [bun](https://bun.sh) installed:
 
 ```bash
-go install github.com/thisisnic/tasktracker/cmd/tasktracker@latest
+git clone https://github.com/thisisnic/tasktracker && cd tasktracker
+make install        # builds the web app, then installs the binary
 ```
 
 **Updating:**
@@ -218,8 +259,8 @@ You do not need to ask. Once a day, the first command you run asks GitHub
 for the latest release and keeps the answer in
 `~/.cache/tasktracker/latest-release.json` (or under `$XDG_CACHE_HOME`).
 While a newer release is out, every command that works ends with a line
-on stderr saying so, and the UI shows it in its title line until you
-update. A
+on stderr saying so, and the terminal UI shows it in its title line until
+you update. A
 build that is not a release, such as one from a checkout, is not
 compared and nothing is asked. If GitHub cannot be reached the last
 answer stands and the next run an hour later tries again; nothing is
@@ -230,7 +271,8 @@ wrong.
 
 | Command | What it does |
 | --- | --- |
-| `tasktracker` | Open the terminal UI |
+| `tasktracker` | Serve the browser UI and open it; `--port`, `--no-open` |
+| `tasktracker tui` | Open the terminal UI |
 | `tasktracker area add NAME` | Add an area; `--in` puts it inside another, `--json` |
 | `tasktracker area list` | Areas as a tree with project counts; `--json` |
 | `tasktracker area edit ID` | Rename or move an area; `--name`, `--in`, `--top` |
@@ -275,13 +317,16 @@ array.
 ## Development
 
 ```bash
-make test
-make build
+make test           # the Go suite
+make build          # builds the web app into internal/server/dist, then the binary
+make check          # everything CI runs, the web app's type check and tests included
+cd web && bun run dev   # the web app on :5173, proxying /api to a running tasktracker
 ```
 
-Go 1.26, Cobra, Bubble Tea v2, huh, modernc SQLite, age. Every commit is
-reviewed by [roborev](https://github.com/kenn-io/roborev). Releases are cut
-by tagging: `git tag -a v0.1.0 -m "..." && git push origin v0.1.0`.
+Go 1.26, Cobra, Bubble Tea v2, huh, modernc SQLite, age; Svelte 5, Vite and
+bun for the browser UI. Every commit is reviewed by
+[roborev](https://github.com/kenn-io/roborev). Releases are cut by tagging:
+`git tag -a v0.1.0 -m "..." && git push origin v0.1.0`.
 
 ## License
 

@@ -7,14 +7,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/thisisnic/tasktracker/internal/config"
@@ -1020,5 +1023,188 @@ func TestUpdateNotice(t *testing.T) {
 		if _, errOut := r.runBoth("", false, args...); strings.Contains(errOut, "is out") {
 			t.Errorf("%v: stderr %q", args, errOut)
 		}
+	}
+}
+
+// freePort is a loopback port nothing is listening on at the moment.
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port
+}
+
+// serve runs the bare command in the background with --no-open and
+// returns its stdout, stderr, and a channel that carries its result
+// once it ends; cancelling ctx ends it.
+func (r *runner) serve(ctx context.Context, args ...string) (out, errOut *bytes.Buffer, done <-chan error) {
+	r.t.Helper()
+	root := New(r.start)
+	out, errOut = &bytes.Buffer{}, &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(errOut)
+	root.SetArgs(append([]string{"--db", r.db, "--no-open"}, args...))
+	errc := make(chan error, 1)
+	go func() { errc <- root.ExecuteContext(ctx) }()
+	return out, errOut, errc
+}
+
+// waitFor polls url until it answers, failing after a while.
+func waitFor(t *testing.T, url string) *http.Response {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, err := http.Get(url)
+		if err == nil {
+			return resp
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s: %v", url, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestServe(t *testing.T) {
+	r := newRunner(t)
+	port := freePort(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out, errOut, done := r.serve(ctx, "--port", strconv.Itoa(port))
+	resp := waitFor(t, fmt.Sprintf("http://127.0.0.1:%d/api/outline", port))
+	var o struct {
+		Outline task.Outline `json:"outline"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&o); err != nil || o.Outline.Projects == nil {
+		t.Errorf("outline: %+v, %v", o, err)
+	}
+	resp.Body.Close()
+	// Something the CLI wrote is what the API serves.
+	r.run("", false, "project", "add", "house")
+	resp = waitFor(t, fmt.Sprintf("http://127.0.0.1:%d/api/projects", port))
+	var ps []task.Project
+	if err := json.NewDecoder(resp.Body).Decode(&ps); err != nil || len(ps) != 1 || ps[0].Name != "house" {
+		t.Errorf("projects: %+v, %v", ps, err)
+	}
+	resp.Body.Close()
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("serve: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not stop")
+	}
+	if want := fmt.Sprintf("serving http://127.0.0.1:%d/ (database %s)", port, r.db); !strings.Contains(out.String(), want) {
+		t.Errorf("stdout %q, want %q", out.String(), want)
+	}
+	if errOut.String() != "" {
+		t.Errorf("stderr %q", errOut.String())
+	}
+}
+
+func TestServePortFromConfig(t *testing.T) {
+	r := newRunner(t)
+	port := freePort(t)
+	cfg := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfg, []byte(fmt.Sprintf("port = %d\n", port)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out, _, done := r.serve(ctx, "--config", cfg)
+	waitFor(t, fmt.Sprintf("http://127.0.0.1:%d/api/version", port)).Body.Close()
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("serve: %v", err)
+	}
+	if want := fmt.Sprintf("serving http://127.0.0.1:%d/", port); !strings.Contains(out.String(), want) {
+		t.Errorf("stdout %q, want %q", out.String(), want)
+	}
+
+	// A broken config is reported and the default port stands, as the
+	// defaults do for the TUI; so does a config whose port is out of
+	// range, rather than port 0 binding a random one the printed URL
+	// does not name. The default port is held here first, so that the
+	// run ends at once with the error for a taken port, which names the
+	// port it tried; held by this test or by a tasktracker already
+	// serving on this machine, the error is the same.
+	if ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", config.DefaultPort)); err == nil {
+		defer ln.Close()
+	}
+	for _, bad := range []string{"[backup\n", "port = 0\n", "port = 70000\n"} {
+		if err := os.WriteFile(cfg, []byte(bad), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, errOut, done := r.serve(ctx, "--config", cfg)
+		if err := <-done; err == nil || !strings.Contains(err.Error(), fmt.Sprintf("port %d is already in use", config.DefaultPort)) {
+			t.Errorf("%q: serve: %v", bad, err)
+		}
+		if !strings.Contains(errOut.String(), "note: config: ") || !strings.Contains(errOut.String(), "using the default port") {
+			t.Errorf("%q: stderr %q", bad, errOut.String())
+		}
+	}
+
+	// With --port the config's port is not used, so the note does not
+	// name the default port: a broken file is noted for the goal lookup
+	// alone, and a bad port in it not at all.
+	port = freePort(t)
+	for bad, want := range map[string]string{
+		"[backup\n":      "note: config: " + cfg + ": toml: ",
+		"port = 70000\n": "",
+	} {
+		if err := os.WriteFile(cfg, []byte(bad), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// The earlier runs ended on their cancelled context; this one
+		// has to come up, so it gets its own.
+		ctx, cancel := context.WithCancel(context.Background())
+		out, errOut, done := r.serve(ctx, "--config", cfg, "--port", strconv.Itoa(port))
+		waitFor(t, fmt.Sprintf("http://127.0.0.1:%d/api/version", port)).Body.Close()
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("%q with --port: %v", bad, err)
+		}
+		if !strings.Contains(out.String(), fmt.Sprintf("serving http://127.0.0.1:%d/", port)) {
+			t.Errorf("%q with --port: stdout %q", bad, out.String())
+		}
+		got := errOut.String()
+		if strings.Contains(got, "default port") || !strings.HasPrefix(got, want) || (want != "" && !strings.HasSuffix(got, "; using goaltracker's default database\n")) {
+			t.Errorf("%q with --port: stderr %q, want prefix %q", bad, got, want)
+		}
+	}
+}
+
+func TestServeBadPort(t *testing.T) {
+	r := newRunner(t)
+	for _, p := range []string{"0", "70000", "-1"} {
+		if msg := r.run("", true, "--no-open", "--port", p); !strings.Contains(msg, "--port must be between 1 and 65535") {
+			t.Errorf("--port %s: %q", p, msg)
+		}
+	}
+	// A port already taken is refused rather than bound at random.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	port := ln.Addr().(*net.TCPAddr).Port
+	if msg := r.run("", true, "--no-open", "--port", strconv.Itoa(port)); !strings.Contains(msg, fmt.Sprintf("port %d is already in use", port)) {
+		t.Errorf("taken port: %q", msg)
+	}
+}
+
+func TestTUICommandExists(t *testing.T) {
+	r := newRunner(t)
+	out := r.run("", false, "help")
+	if !strings.Contains(out, "tui") || !strings.Contains(out, "Open the terminal UI") {
+		t.Errorf("help: %q", out)
+	}
+	if msg := r.run("", true, "tui", "extra"); msg != `unknown command "extra" for "tasktracker tui"` {
+		t.Errorf("tui with an argument: %q", msg)
 	}
 }

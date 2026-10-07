@@ -20,3 +20,8 @@ jobs:
       - run: go test ./... -timeout 5m
       - run: test -z "$(gofmt -l .)"
       - run: go mod tidy && git diff --exit-code go.mod go.sum
+      - uses: oven-sh/setup-bun@v2
+      - run: cd web && bun install --frozen-lockfile
+      - run: cd web && bun run check
+      - run: cd web && bun run test
+      - run: cd web && bun run build

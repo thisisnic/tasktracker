@@ -15,8 +15,18 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// DefaultPort is where the browser UI is served unless the config says
+// otherwise: next to goaltracker's and ghrepotracker's, and not one that
+// local dev servers reach for.
+const DefaultPort = 7344
+
 // Config is the whole config file.
 type Config struct {
+	// Port is the loopback port the browser UI and its API are served
+	// on. Only the server reads it, so Load does not check its range:
+	// a port out of range must not keep the TUI from backing up or
+	// finding goaltracker. The server checks it, see PortError.
+	Port        int         `toml:"port"`
 	Backup      Backup      `toml:"backup"`
 	Goaltracker Goaltracker `toml:"goaltracker"`
 }
@@ -44,6 +54,15 @@ type Backup struct {
 	Git bool `toml:"git"`
 }
 
+// PortError says what is wrong with the port, or nil when it can be
+// bound: the server's own check, since Load leaves the port to it.
+func (c Config) PortError() error {
+	if c.Port <= 0 || c.Port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535")
+	}
+	return nil
+}
+
 // Configured reports whether backups have somewhere to go and a key.
 func (b Backup) Configured() bool { return b.Dir != "" && b.Recipient != "" }
 
@@ -65,9 +84,9 @@ func Path() string { return filepath.Join(Dir(), "config.toml") }
 // DefaultIdentityFile is where `tasktracker key new` writes the private key.
 func DefaultIdentityFile() string { return filepath.Join(Dir(), "key.txt") }
 
-// Load reads the config file. A missing file yields an empty Config.
+// Load reads the config file. A missing file yields the defaults.
 func Load(path string) (Config, error) {
-	var c Config
+	c := Config{Port: DefaultPort}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return c, nil
@@ -76,6 +95,8 @@ func Load(path string) (Config, error) {
 		return c, err
 	}
 	if _, err := toml.Decode(string(data), &c); err != nil {
+		// A file that fails part way may have set the port already.
+		c.Port = DefaultPort
 		return c, fmt.Errorf("%s: %w", path, err)
 	}
 	c.Backup.Dir = ExpandHome(c.Backup.Dir)
@@ -96,7 +117,10 @@ func ExpandHome(p string) string {
 
 // Example is a config file with every field, for `tasktracker key new` to print.
 func Example(recipient, identityFile string) string {
-	return fmt.Sprintf(`[backup]
+	return fmt.Sprintf(`# The loopback port the browser UI is served on.
+port = %d
+
+[backup]
 # Where encrypted snapshots go. Make this a private git repo of your own.
 dir = "~/tasktracker-data"
 # Your age public key. Snapshots are encrypted to it.
@@ -115,5 +139,5 @@ git = false
 # Where goaltracker keeps its database, read only to show the goals a
 # project links to. Leave blank for goaltracker's own default location.
 db = ""
-`, recipient, identityFile)
+`, DefaultPort, recipient, identityFile)
 }

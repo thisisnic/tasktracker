@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 )
@@ -29,11 +28,11 @@ type NewArea struct {
 func (s *Store) AddArea(ctx context.Context, in NewArea) (Area, error) {
 	in.Name = strings.TrimSpace(in.Name)
 	if in.Name == "" {
-		return Area{}, errors.New("name is required")
+		return Area{}, invalid("name is required")
 	}
 	if in.ParentID != 0 {
 		if _, err := s.GetArea(ctx, in.ParentID); err != nil {
-			return Area{}, fmt.Errorf("area %d: %w", in.ParentID, err)
+			return Area{}, badRef("area", in.ParentID, err)
 		}
 	}
 	res, err := s.db.ExecContext(ctx, `INSERT INTO areas (name, parent_id, created_at) VALUES (?, ?, ?)`,
@@ -115,7 +114,7 @@ func (s *Store) UpdateArea(ctx context.Context, id int64, e AreaEdit) (Area, err
 	if e.Name != nil {
 		v := strings.TrimSpace(*e.Name)
 		if v == "" {
-			return Area{}, errors.New("name is required")
+			return Area{}, invalid("name is required")
 		}
 		a.Name = v
 	}
@@ -146,11 +145,11 @@ func (s *Store) checkParent(ctx context.Context, id, parent int64) error {
 		byID[a.ID] = a
 	}
 	if _, ok := byID[parent]; !ok {
-		return fmt.Errorf("area %d: %w", parent, ErrNotFound)
+		return badRef("area", parent, ErrNotFound)
 	}
 	for p := parent; p != 0; p = byID[p].ParentID {
 		if p == id {
-			return errors.New("an area cannot be put inside itself")
+			return invalid("an area cannot be put inside itself")
 		}
 	}
 	return nil

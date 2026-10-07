@@ -179,14 +179,14 @@ change in goaltracker, left as a follow-up there.
 
 ## Showing tasks
 
-The TUI is the main way in. The CLI exists for scripts and coding agents,
-with `--json`.
+The TUI and the browser page (see Browser UI) are the ways in. The CLI
+exists for scripts and coding agents, with `--json`.
 
 Layout, to be adjusted as it gets used:
 
 - A tree pane: areas, then projects as headers, their tasks indented under
   them, and subtasks under tasks with a tick box. A detail pane for the
-  selected item.
+  selected item. The page lays the same two panes out side by side.
 - The same pane arranged by deadline: every open task as one list,
   soonest due first, undated tasks last, subtasks still under their task
   and the project name after the title. The list is split under headings
@@ -294,12 +294,99 @@ both the CLI and the UI, and says when a newer release is out.
   does not cost every command a five second wait. `tasktracker update
   --check` is there for anyone who wants to know what went wrong.
 
+## Browser UI
+
+The terminal UI was the main way in. A browser page is the other: it can
+be a browser's home page, so the day's tasks are the first thing seen,
+and a mouse can do what the keys do. The decisions follow ghrepotracker,
+which went this way first, so the two feel the same.
+
+- The bare command serves. `tasktracker` binds a loopback port, serves
+  the page and its API, and opens a browser tab; `tasktracker tui` opens
+  the terminal UI. The page is the way in from now on, and a home page
+  that needs a flag to appear is not one. The port is in the config,
+  `port`, and `--port` overrides it for one run; a fixed port keeps the
+  bookmark working. A taken port is an error rather than a random one,
+  for the same reason.
+- One API, the store's own shapes. Every read is the object the CLI's
+  `--json` prints, and the outline is `task list --json` exactly, so a
+  script can learn one vocabulary. Every write is one `Store` method,
+  so the CLI, the terminal UI and the browser cannot disagree about what
+  a change means. An edit sends only the fields it changes; a status
+  change on its own goes through the one-UPDATE `MarkTask`, and a
+  project's state change through `MarkProject`, as the terminal UI's
+  space and x keys do, so neither can write back a title or a name read
+  a moment before another process changed it.
+- Errors are told apart. The store's input errors match `ErrInvalid`
+  and answer 400; `ErrNotFound` answers 404; anything else is 500. The
+  messages are the CLI's, unchanged: `invalidError` reads as its
+  message and only matches the sentinel. A project or area the body
+  names that does not exist matches both and answers 400, so that 404
+  always means the thing at the address.
+- No release notice on the page. The terminal UI shows one in its
+  title line from the check the command starts; the server starts the
+  same check and says its answer on stderr when it stops, which for a
+  server left running is rarely. Showing it on the page would need the
+  server to check again every day, which it does not do yet; whether
+  it should is an open question.
+- Only this machine, only this page. The listener is 127.0.0.1; a Host
+  header that is not loopback is refused, so a name rebound to loopback
+  cannot read the tasks; every write must declare a JSON body, which a
+  form cannot, and an Origin from elsewhere is refused.
+- Changes from elsewhere reach the page the way they reach the terminal
+  UI: the page polls a version and reloads when it has moved. The
+  version is SQLite's data version, which moves when another process
+  commits, joined with the server's own count of writes, since the
+  store is one connection and SQLite reports other connections' commits
+  only: without the count, a second tab would never see what the first
+  tab changed. The server's start time goes in front of both, since
+  both start again when it is restarted, and a page left open across
+  the restart would else miss what was written while it was down. A
+  page still reloads after its own writes without waiting for the poll.
+- goaltracker is read on request, not at start. `/api/goals` lists what
+  it holds and says whether it could be read, so the page offers a pick
+  list when it can and typed ids when it cannot, as the terminal UI's
+  form does, and shows the ids bare in the detail when it cannot.
+- The page is the terminal UI laid out for a browser: the same two
+  panes, the same rows in the same order, the same detail, the same
+  status line wording, and the same keys, with the actions also as
+  buttons under the detail for the mouse. The rules for where the
+  selection lands after a change are ported line for line, so the two
+  UIs agree and there is one set of rules to reason about. A form sends
+  only the fields that changed, so a stored issue the server would
+  refuse does not block an edit, as the terminal UI's form keeps it.
+- The page's folds live in the browser's storage, not the terminal
+  UI's file. Folds are the state of a screen, and the page's screen is
+  the browser; the two UIs are different screens and keep their own
+  arrangement. They are matched by the row's creation stamp as the file's
+  are, so a deleted row's fold cannot land on whatever next reuses its
+  id. A fold whose row is not listed is kept rather than pruned, since
+  a finished project hidden until `f` still exists; checking every
+  project would be another request per reload for nothing.
+- No backup when the server stops. The terminal UI backs up on quit
+  because quitting ends a session of changes; the server is left running
+  for days as a home page, and stopping it is not the end of anything,
+  so a snapshot then would be rare and badly timed. `tasktracker backup`
+  and the terminal UI's quit cover it, and whether the server should
+  back up on a schedule is an open question.
+- The page is built into the binary. Releases build it first, so the
+  downloaded binary serves it; a plain `go install` cannot, and serves a
+  notice saying so in its place. Needing bun to build from source is the
+  price of one binary with no files beside it.
+
 ## Open questions
 
 1. **Day to day.** What to see first when opening the app. The tree opens
    first and the by-deadline list is one key away, until using it says
-   otherwise.
+   otherwise. The page opens the same way; as a home page it may want
+   to remember the last view.
 2. **Tasks without a project.** For now every task needs a project; a
    catch-all project is one way round it if that turns out to be annoying.
 3. **What "done" means for a project.** Whether a project can be marked
    done while it still has open tasks is left open; nothing stops it.
+4. **Backups while serving.** The server never backs up. If the browser
+   becomes the main way in, a daily snapshot from the server, or one
+   after a quiet spell following a change, may be wanted.
+5. **Release notices while serving.** The page shows none. A server
+   that checks daily and a line in the page's top bar would match what
+   the terminal UI does.

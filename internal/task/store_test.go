@@ -360,7 +360,7 @@ func TestArchive(t *testing.T) {
 	tk := addTask(t, s, NewTask{ProjectID: p.ID, Title: "paint"})
 
 	// An open task cannot be put away.
-	if err := s.ArchiveTask(ctx, tk.ID, true); err == nil || !strings.Contains(err.Error(), "still todo") {
+	if err := s.ArchiveTask(ctx, tk.ID, true); err == nil || !strings.Contains(err.Error(), "still todo") || !errors.Is(err, ErrInvalid) {
 		t.Errorf("archiving an open task: %v", err)
 	}
 	if err := s.ArchiveTask(ctx, 99, true); !errors.Is(err, ErrNotFound) {

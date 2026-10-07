@@ -10,9 +10,23 @@ import (
 	"github.com/thisisnic/tasktracker/internal/tui"
 )
 
-// runTUI is what the bare command does: open the terminal UI, then back
-// up on the way out if the config asks for it. newer is the background
-// check for a newer release, for the UI's title line.
+// tuiCmd opens the terminal UI. newer points at the root's wait on the
+// release check, which is set once the command runs, so it is read then
+// and not when the command is built.
+func tuiCmd(dbPath, cfgPath *string, newer *func() string) *cobra.Command {
+	return &cobra.Command{
+		Use:   "tui",
+		Short: "Open the terminal UI",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runTUI(cmd, *dbPath, *cfgPath, *newer)
+		},
+	}
+}
+
+// runTUI opens the terminal UI, then backs up on the way out if the
+// config asks for it. newer is the background check for a newer release,
+// for the UI's title line.
 func runTUI(cmd *cobra.Command, dbPath, cfgPath string, newer func() string) error {
 	// The config only affects backups and the goal lookup, so a broken one
 	// must not keep the UI from opening. It is reported on exit instead,

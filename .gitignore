@@ -4,3 +4,6 @@
 # build output
 /tasktracker
 /dist/
+/internal/server/dist/*
+!/internal/server/dist/.gitkeep
+/web/node_modules/

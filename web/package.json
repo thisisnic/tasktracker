@@ -1,0 +1,29 @@
+{
+  "name": "tasktracker-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "bun@1.4.2",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kenn-io/kit-ui": "github:kenn-io/kit-ui#4fd2b68cdf8de9711b848666273377eba58824ab",
+    "@lucide/svelte": "1.49.0",
+    "dompurify": "^3.2.0",
+    "marked": "^18.0.0",
+    "shiki": "^4.0.0",
+    "svelte": "5.57.1"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "7.3.1",
+    "@types/node": "24.10.0",
+    "svelte-check": "4.7.6",
+    "typescript": "5.9.3",
+    "vite": "8.3.1",
+    "vitest": "5.0.3"
+  }
+}

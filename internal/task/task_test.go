@@ -1,6 +1,7 @@
 package task
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -191,5 +192,38 @@ func TestNodeCounts(t *testing.T) {
 	}
 	if !(Project{State: Active}).Open() || (Project{State: Shelved}).Open() {
 		t.Error("Project.Open wrong")
+	}
+}
+
+// TestInvalidErrors checks that bad input is told apart from everything
+// else by ErrInvalid, while the message stays the message.
+func TestInvalidErrors(t *testing.T) {
+	_, err := ParseDue("soon", time.Now())
+	if !errors.Is(err, ErrInvalid) || err.Error() != `due "soon": want YYYY-MM-DD, today, tomorrow or none` {
+		t.Errorf("ParseDue: %v", err)
+	}
+	if _, err := ParseIssue("nope"); !errors.Is(err, ErrInvalid) {
+		t.Errorf("ParseIssue: %v", err)
+	}
+	if _, err := ParseState("maybe"); !errors.Is(err, ErrInvalid) {
+		t.Errorf("ParseState: %v", err)
+	}
+	if _, err := ParseStatus("maybe"); !errors.Is(err, ErrInvalid) {
+		t.Errorf("ParseStatus: %v", err)
+	}
+	if _, err := NormaliseGoalIDs([]int64{0}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("NormaliseGoalIDs: %v", err)
+	}
+	if errors.Is(ErrNotFound, ErrInvalid) {
+		t.Error("ErrNotFound matches ErrInvalid")
+	}
+	// A reference to a project that does not exist is both.
+	ref := badRef("project", 9, ErrNotFound)
+	if !errors.Is(ref, ErrNotFound) || !errors.Is(ref, ErrInvalid) || ref.Error() != "project 9: not found" {
+		t.Errorf("badRef: %v", ref)
+	}
+	other := badRef("project", 9, errors.New("disk full"))
+	if errors.Is(other, ErrInvalid) || other.Error() != "project 9: disk full" {
+		t.Errorf("badRef with another error: %v", other)
 	}
 }

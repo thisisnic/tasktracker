@@ -1,8 +1,9 @@
 # tasktracker
 
-A terminal task tracker: areas hold projects, projects hold tasks, tasks
-hold subtasks. One Go binary with a Cobra CLI and a Bubble Tea TUI over a
-SQLite file. README.md is the user-facing reference; docs/design/tasks.md
+A task tracker: areas hold projects, projects hold tasks, tasks hold
+subtasks. One Go binary with a Cobra CLI, a Bubble Tea TUI and a loopback
+web server over a SQLite file. The bare command serves; `tui` opens the
+terminal UI. README.md is the user-facing reference; docs/design/tasks.md
 holds the design decisions and open questions.
 
 ## Layout
@@ -12,6 +13,13 @@ holds the design decisions and open questions.
   through `Store` methods; `migrate()` only adds columns.
 - `internal/cli` — Cobra commands, every one with `--json`.
 - `internal/tui` — Bubble Tea v2 model, huh forms, row list, cursor rules.
+- `internal/server` — the JSON API and the browser UI on a loopback port.
+  Every write is one `Store` method; `ErrInvalid` is 400, `ErrNotFound`
+  404, anything else 500. The page is embedded from `dist/`, which
+  `make web` fills.
+- `web` — the Svelte 5 page. `src/lib/rows.ts` holds the row building
+  and landing rules ported from the TUI; `src/lib/app.svelte.ts` the
+  state and every action; `src/components` the panes and forms.
 - `internal/goallink` — read-only reader of a goaltracker database.
 - `internal/backup`, `internal/update`, `internal/version`,
   `internal/config` — shared plumbing, kept in step with goaltracker.
@@ -20,8 +28,16 @@ holds the design decisions and open questions.
 
 ```bash
 make vet && make test   # before every commit
-make build              # ./tasktracker, gitignored
+make check              # also gofmt, go mod tidy, and the web app's svelte-check and vitest
+make build              # builds the web app (needs bun), then ./tasktracker, gitignored
 ```
+
+A change to the page is checked with `cd web && bun run check && bun run
+test` and seen with `make build` and a scratch database; the TUI's
+landing and message rules apply to the page too, since `rows.ts` and
+`app.svelte.ts` are ports of `tui.go`, and their tests in `src/lib`
+cover the landings with the same fixtures in spirit: tree order and
+due order disagreeing.
 
 Every commit is reviewed by roborev from a post-commit hook. The loop is:
 

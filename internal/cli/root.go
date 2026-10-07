@@ -49,6 +49,8 @@ func dataDirDBPath() string {
 // passes update.Start. Nil means no check, which is what tests want.
 func New(start func(context.Context) func() string) *cobra.Command {
 	var dbPath, cfgPath string
+	var port int
+	var noOpen bool
 	// newer waits for the release check once one has started. The TUI
 	// shows its answer in its title line, and the root's post-run hook
 	// says it after every other command.
@@ -59,9 +61,11 @@ func New(start func(context.Context) func() string) *cobra.Command {
 		Long: `tasktracker is a local tracker for projects, tasks and subtasks, with
 areas above projects to group them.
 
-Run it with no arguments to open the terminal UI. Subcommands give the same
-data a scriptable interface; add --json to any list or show command for
-machine-readable output.
+Run it with no arguments to serve the browser UI on a loopback port and
+open it; tasktracker tui opens the terminal UI instead. Subcommands give
+the same data a scriptable interface; add --json to any list or show
+command for machine-readable output. The browser UI's JSON API is under
+/api/ on the same port.
 
 A project can link to goals in goaltracker. tasktracker reads goaltracker's
 database read-only to show their statements; set [goaltracker] db in the
@@ -78,7 +82,7 @@ line; tasktracker update installs it.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runTUI(cmd, dbPath, cfgPath, newer)
+			return runServe(cmd, dbPath, cfgPath, port, noOpen)
 		},
 		// The check starts once the command to run is known, so that shell
 		// completion, which is read by the shell and must not touch the
@@ -99,8 +103,10 @@ line; tasktracker update installs it.`,
 	}
 	root.PersistentFlags().StringVar(&dbPath, "db", DefaultDBPath(), "path to the SQLite database (env TASKTRACKER_DB)")
 	root.PersistentFlags().StringVar(&cfgPath, "config", config.Path(), "path to the config file")
+	root.Flags().IntVar(&port, "port", 0, "port to serve the browser UI on (overrides the config)")
+	root.Flags().BoolVar(&noOpen, "no-open", false, "do not open a browser")
 	root.SetVersionTemplate("tasktracker {{.Version}}\n")
-	root.AddCommand(areaCmd(&dbPath), projectCmd(&dbPath, &cfgPath), taskCmd(&dbPath), subtaskCmd(&dbPath), keyCmd(), backupCmd(&dbPath, &cfgPath), restoreCmd(&dbPath, &cfgPath), versionCmd(), updateCmd())
+	root.AddCommand(tuiCmd(&dbPath, &cfgPath, &newer), areaCmd(&dbPath), projectCmd(&dbPath, &cfgPath), taskCmd(&dbPath), subtaskCmd(&dbPath), keyCmd(), backupCmd(&dbPath, &cfgPath), restoreCmd(&dbPath, &cfgPath), versionCmd(), updateCmd())
 	return root
 }
 
