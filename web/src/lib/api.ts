@@ -163,6 +163,7 @@ export const api = {
     call<Task>("POST", "/api/tasks", { project_id, title, due, issue, notes }),
   editTask: (id: number, patch: TaskEdit) => call<Task>("PATCH", `/api/tasks/${id}`, patch),
   archiveTask: (id: number, archived: boolean) => call<Task>("PUT", `/api/tasks/${id}/archived`, { archived }),
+  archiveFinished: () => call<{ archived: number }>("POST", "/api/tasks/archive-finished"),
   copyTask: (id: number, patch: TaskEdit) => call<TaskNode>("POST", `/api/tasks/${id}/copy`, patch),
   deleteTask: (id: number) => call<void>("DELETE", `/api/tasks/${id}`),
 

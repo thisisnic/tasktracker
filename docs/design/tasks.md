@@ -361,18 +361,21 @@ which went this way first, so the two feel the same.
   after a change are ported line for line, so the two UIs agree and
   there is one set of rules to reason about. How it looks follows web
   practice instead: one list in the page's own typeface, a checkbox on
-  every task and subtask, a chevron to fold, a chip for a due date, and
-  a drawer that opens on a click, or on enter, with the detail and the
-  actions as buttons. A task's box is ticked when it is done and clear
-  otherwise, so a dropped task's box is clear and a click on it ticks
-  the task done, where space on that row reopens it: a tick says done,
-  and the box does what a tick says. Enter opens, as it does in any list on the web, where the
-  terminal UI has it step the row on like space; space still does. A
-  first version copied the terminal UI's two panes, monospace and
-  glyphs, and read as a terminal in a browser, which was not the point
-  of having a page. A form sends only the fields that changed, so a
-  stored issue the server would refuse does not block an edit, as the
-  terminal UI's form keeps it.
+  every task and subtask, a chevron to fold, a chip for a due date, a
+  form that opens on a click, and a drawer that opens on enter with the
+  detail and the actions as buttons. A click edits, as on any page; a
+  heading has no form, so its click opens the drawer. A task's box is
+  ticked when done and clear otherwise, so a click on a dropped task's
+  box ticks it done, where space would reopen it. A first version
+  copied the terminal UI's two panes, monospace and glyphs, and read as
+  a terminal in a browser, which was not the point of having a page. A
+  form sends only the fields that changed, so a stored issue the server
+  would refuse does not block an edit, as the terminal UI's form keeps
+  it.
+- Archive finished, in the top bar, archives every finished task in an
+  active project in one UPDATE; a finished project is out of sight with
+  everything in it already. It is the page's alone until a scope is
+  missed.
 - The page's folds live in the browser's storage, not the terminal
   UI's file. Folds are the state of a screen, and the page's screen is
   the browser; the two UIs are different screens and keep their own

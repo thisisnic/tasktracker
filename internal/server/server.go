@@ -91,6 +91,7 @@ func (s *Server) routes() {
 	m.HandleFunc("POST /api/tasks", s.addTask)
 	m.HandleFunc("PATCH /api/tasks/{id}", s.editTask)
 	m.HandleFunc("PUT /api/tasks/{id}/archived", s.archiveTask)
+	m.HandleFunc("POST /api/tasks/archive-finished", s.archiveFinished)
 	m.HandleFunc("POST /api/tasks/{id}/copy", s.copyTask)
 	m.HandleFunc("DELETE /api/tasks/{id}", s.deleteTask)
 	m.HandleFunc("POST /api/tasks/{id}/subtasks", s.addSubtask)
@@ -701,6 +702,23 @@ func (s *Server) editTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, t)
+}
+
+// archivedCount is the answer to POST /api/tasks/archive-finished.
+type archivedCount struct {
+	Archived int64 `json:"archived"`
+}
+
+// archiveFinished puts every finished task in an active project away in
+// one go and says how many went, for the page's one button; zero is an
+// answer, not an error.
+func (s *Server) archiveFinished(w http.ResponseWriter, r *http.Request) {
+	n, err := s.store.ArchiveFinished(r.Context())
+	if err != nil {
+		failErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, archivedCount{Archived: n})
 }
 
 // archivedBody is the one field of PUT /api/tasks/{id}/archived.

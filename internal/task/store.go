@@ -884,6 +884,19 @@ func (s *Store) ArchiveTask(ctx context.Context, id int64, archived bool) error 
 	return invalid("task is still %s; mark it done or dropped first", t.Status)
 }
 
+// ArchiveFinished puts every finished task in an active project away,
+// in one statement, and reports how many went. Open tasks are left
+// alone, as ArchiveTask leaves them, and so are tasks in done or shelved
+// projects, which are out of sight with their project already; nothing
+// to put away is zero, not an error.
+func (s *Store) ArchiveFinished(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET archived = 1 WHERE archived = 0 AND status IN ('done','dropped') AND project_id IN (SELECT id FROM projects WHERE state = 'active')`)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // DeleteTask removes a task and its subtasks.
 func (s *Store) DeleteTask(ctx context.Context, id int64) error {
 	res, err := s.db.ExecContext(ctx, `DELETE FROM tasks WHERE id = ?`, id)

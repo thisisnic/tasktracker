@@ -118,6 +118,18 @@ class Fake {
         if (t.status === "todo") t.archived = false;
         return { ...t };
       },
+      archiveFinished: async () => {
+        this.calls.push("archiveFinished");
+        this.writes++;
+        let archived = 0;
+        eachTask(this.data, (p, t) => {
+          if (p.project.state === "active" && !t.task.archived && t.task.status !== "todo") {
+            t.task.archived = true;
+            archived++;
+          }
+        });
+        return { archived };
+      },
       archiveTask: async (id: number, archived: boolean) => {
         this.calls.push(`archiveTask ${id} ${archived}`);
         this.writes++;
@@ -363,6 +375,73 @@ describe("archiving", () => {
   });
 });
 
+describe("archiving every finished task", () => {
+  it("puts the done and dropped ones away and lands the cursor near", async () => {
+    const { app, fake } = await open();
+    fake.data.areas[0]!.projects[0]!.tasks[1]!.task.status = "dropped";
+    await app.reload();
+    selectKey(app, "task:5"); // the last row
+    await app.archiveFinished();
+    expect(fake.calls).toEqual(["archiveFinished"]);
+    expect(app.status).toBe("archived 2 finished tasks (hidden; f shows archived)");
+    const keys = app.rows.map((r) => key(rowTarget(r)));
+    expect(keys).not.toContain("task:2");
+    expect(keys).not.toContain("task:5");
+    expect(selected(app)).toBe("task:4");
+  });
+
+  it("says so when there is nothing to put away", async () => {
+    const { app, fake } = await open();
+    fake.data.projects[0]!.tasks[1]!.task.status = "todo";
+    await app.reload();
+    await app.archiveFinished();
+    expect(fake.calls).toEqual(["archiveFinished"]);
+    expect(app.status).toBe("no finished tasks to archive");
+  });
+
+  it("keeps the rows listed with archived shown, and says nothing about f", async () => {
+    const { app } = await open();
+    await app.toggleShowAll();
+    selectKey(app, "task:5");
+    await app.archiveFinished();
+    expect(app.status).toBe("archived 1 finished task");
+    expect(selected(app)).toBe("task:5");
+    expect(app.rows.find((r) => key(rowTarget(r)) === "task:5")?.task?.task.archived).toBe(true);
+  });
+
+  it("leaves a finished task in a finished project where it is", async () => {
+    const { app, fake } = await open();
+    fake.data.projects[0]!.project.state = "shelved"; // admin, with done task 5
+    fake.data.areas[0]!.projects[0]!.tasks[1]!.task.status = "dropped"; // task 2
+    await app.toggleShowAll();
+    selectKey(app, "task:5");
+    await app.archiveFinished();
+    expect(app.status).toBe("archived 1 finished task");
+    expect(selected(app)).toBe("task:5");
+    expect(app.rows.find((r) => key(rowTarget(r)) === "task:5")?.task?.task.archived).toBeFalsy();
+    expect(app.rows.find((r) => key(rowTarget(r)) === "task:2")?.task?.task.archived).toBe(true);
+  });
+
+  it("by deadline says where the archived tasks are listed", async () => {
+    const { app } = await open();
+    app.toggleView();
+    selectKey(app, "task:2");
+    await app.archiveFinished();
+    expect(app.status).toBe("archived 1 finished task (by project lists them with f)");
+    expect(selected(app)).toBe("task:2");
+  });
+
+  it("by deadline with archived shown does not name f, which would hide them", async () => {
+    const { app, fake } = await open();
+    await app.toggleShowAll();
+    app.toggleView();
+    fake.data.projects[0]!.tasks[0]!.task.status = "dropped";
+    await app.reload();
+    await app.archiveFinished();
+    expect(app.status).toBe("archived 2 finished tasks (by project lists them)");
+  });
+});
+
 describe("the checkbox", () => {
   it("ticks a task done, with space's message", async () => {
     const { app, fake } = await open();
@@ -490,6 +569,52 @@ describe("folding", () => {
     app.folds = { "project:1": "2025-12-31T00:00:00Z", "project:99": "2026-01-01T00:00:00Z", "heading:1": "" };
     await app.reload();
     expect(app.folds).toEqual({ "project:99": "2026-01-01T00:00:00Z", "heading:1": "" });
+  });
+});
+
+describe("a click on a row", () => {
+  it("opens the row's form", async () => {
+    const { app } = await open();
+    selectKey(app, "task:2");
+    app.open();
+    expect(app.modal?.kind).toBe("task");
+    app.cancelForm();
+    selectKey(app, "subtask:2");
+    app.open();
+    expect(app.modal?.kind).toBe("subtask");
+    app.cancelForm();
+    selectKey(app, "project:1");
+    app.open();
+    expect(app.modal?.kind).toBe("project");
+  });
+
+  it("opens the detail of a heading, which has no form", async () => {
+    const { app } = await open();
+    app.toggleView();
+    app.first();
+    expect(app.selected()?.kind).toBe("heading");
+    app.open();
+    expect(app.modal).toBeNull();
+    expect(app.drawer).toBe(true);
+  });
+
+  it("only selects while a write is in flight, for a heading too", async () => {
+    const { app, fake } = await open();
+    selectKey(app, "task:2");
+    fake.hold = true;
+    const pressed = app.advance();
+    await new Promise((r) => setTimeout(r, 0));
+    app.open();
+    expect(app.modal).toBeNull();
+    expect(app.drawer).toBe(false);
+    app.toggleView();
+    app.first();
+    app.open();
+    expect(app.drawer).toBe(false);
+    fake.held[0]!();
+    await pressed;
+    // The message was made when space was pressed, by project.
+    expect(app.status).toBe("task #2 done; z archives it");
   });
 });
 

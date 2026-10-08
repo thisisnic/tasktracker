@@ -133,6 +133,7 @@
       <!-- Off while a write is in flight, when the page would drop the
            click and the switch would show a state the rows do not. -->
       <Toggle checked={app.showAll} disabled={app.inFlight} label="Show archived" onchange={() => void app.toggleShowAll()} />
+      <Button size="sm" disabled={app.inFlight} onclick={() => void app.archiveFinished()}>Archive finished</Button>
       <Button size="sm" onclick={() => app.newProject()}>New project</Button>
       <Button size="sm" onclick={() => app.newArea()}>New area</Button>
     {/if}
@@ -148,13 +149,13 @@
   {:else if !app.ready}
     <div class="pad muted">Loading…</div>
   {:else}
-    <RowList {app} onopen={() => app.openDrawer()} />
+    <RowList {app} onrow={() => app.open()} />
   {/if}
 </main>
 
-<!-- The selected row's detail, opened by a click on a row and closed
-     with Escape, the overlay or its button. It is put away while a form
-     or question is open, so Escape closes that and not it. -->
+<!-- The selected row's detail, opened with enter and closed with
+     Escape, the overlay or its button. It is put away while a form or
+     question is open, so Escape closes that and not it. -->
 {#if app.drawer && app.selected() && !app.modal}
   <DetailDrawer title={drawerTitle} onclose={() => app.closeDrawer()} width="min(480px, 100vw)">
     <Detail {app} />

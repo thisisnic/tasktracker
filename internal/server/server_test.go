@@ -478,6 +478,35 @@ func TestTasks(t *testing.T) {
 	}
 }
 
+// TestArchiveFinished puts the done and dropped tasks away in one call
+// and leaves the open one listed; a second call has nothing to do.
+func TestArchiveFinished(t *testing.T) {
+	srv, _ := setup(t, nil)
+	var tk task.Task
+	want(t, srv, 201, "POST", "/api/tasks", map[string]any{"project_id": 1, "title": "clear the gutters"}, &tk)
+	want(t, srv, 200, "PATCH", "/api/tasks/1", map[string]any{"status": "done"}, &tk)
+	want(t, srv, 200, "PATCH", "/api/tasks/3", map[string]any{"status": "dropped"}, &tk)
+	var n struct {
+		Archived int `json:"archived"`
+	}
+	want(t, srv, 200, "POST", "/api/tasks/archive-finished", nil, &n)
+	if n.Archived != 2 {
+		t.Errorf("archived = %d, want 2", n.Archived)
+	}
+	// Tasks 1 and 3 are gone from house; the open task 2 is still in work.
+	var o OutlineResponse
+	want(t, srv, 200, "GET", "/api/outline", nil, &o)
+	house, work := o.Outline.Areas[0].Projects[0], o.Outline.Projects[0]
+	if len(house.Tasks) != 0 || len(work.Tasks) != 1 || work.Tasks[0].Task.ID != 2 {
+		t.Errorf("tasks still listed: house %+v, work %+v", house.Tasks, work.Tasks)
+	}
+	n.Archived = -1
+	want(t, srv, 200, "POST", "/api/tasks/archive-finished", nil, &n)
+	if n.Archived != 0 {
+		t.Errorf("second call archived = %d, want 0", n.Archived)
+	}
+}
+
 func TestCopyTask(t *testing.T) {
 	srv, _ := setup(t, nil)
 	var n task.TaskNode

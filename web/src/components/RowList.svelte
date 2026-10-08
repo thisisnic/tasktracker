@@ -9,9 +9,10 @@
   // The list: areas and projects as headings that fold, tasks under
   // them with what is due, subtasks under those; a task and a subtask
   // are each a checkbox, ticked when done. A click selects a row and
-  // opens its detail; the checkbox and the fold chevron act without
-  // opening it.
-  let { app, onopen }: { app: AppState; onopen: () => void } = $props();
+  // opens it, through onrow: its form, or the detail for a heading;
+  // enter opens the detail. The checkbox and the fold chevron act
+  // without opening anything.
+  let { app, onrow }: { app: AppState; onrow: () => void } = $props();
 
   let listEl = $state<HTMLElement>();
 
@@ -80,7 +81,7 @@
 
   function onRow(i: number) {
     app.select(i);
-    onopen();
+    onrow();
   }
 </script>
 
@@ -105,8 +106,8 @@
     {#each app.rows as r, i (`${r.kind}:${rowTarget(r).id}`)}
       <!-- The keys are taken by the window and act on the selection,
            never on a row that was clicked earlier: a click selects and
-           opens, and focus goes to the list, so nothing a row could
-           answer to with a key handler would be right. -->
+           opens its form, and focus goes to the list, so nothing a row
+           could answer to with a key handler would be right. -->
       <!-- svelte-ignore a11y_click_events_have_key_events -->
       <div
         class="row {r.kind}"

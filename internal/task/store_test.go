@@ -411,6 +411,43 @@ func TestArchive(t *testing.T) {
 	}
 }
 
+// TestArchiveFinished puts every finished task in an active project
+// away at once: done and dropped tasks, not open ones, not ones already
+// archived, which do not count twice, and not ones in a shelved project.
+func TestArchiveFinished(t *testing.T) {
+	ctx := context.Background()
+	s := open(t)
+	house := addProject(t, s, NewProject{Name: "house"})
+	work := addProject(t, s, NewProject{Name: "work"})
+	old := addProject(t, s, NewProject{Name: "old"})
+	todo := addTask(t, s, NewTask{ProjectID: house.ID, Title: "paint"})
+	done := addTask(t, s, NewTask{ProjectID: house.ID, Title: "fix the gate"})
+	dropped := addTask(t, s, NewTask{ProjectID: work.ID, Title: "email accountant"})
+	before := addTask(t, s, NewTask{ProjectID: work.ID, Title: "old thing"})
+	shelved := addTask(t, s, NewTask{ProjectID: old.ID, Title: "in a shelved project"})
+	check(t, s.MarkTask(ctx, done.ID, Finished))
+	check(t, s.MarkTask(ctx, dropped.ID, Dropped))
+	check(t, s.MarkTask(ctx, before.ID, Finished))
+	check(t, s.ArchiveTask(ctx, before.ID, true))
+	check(t, s.MarkTask(ctx, shelved.ID, Finished))
+	check(t, s.MarkProject(ctx, old.ID, Shelved))
+
+	if n, err := s.ArchiveFinished(ctx); err != nil || n != 2 {
+		t.Fatalf("ArchiveFinished = %d, %v; want 2", n, err)
+	}
+	for _, c := range []struct {
+		id       int64
+		archived bool
+	}{{todo.ID, false}, {done.ID, true}, {dropped.ID, true}, {before.ID, true}, {shelved.ID, false}} {
+		if got, _ := s.GetTask(ctx, c.id); got.Archived != c.archived {
+			t.Errorf("task %d archived = %v, want %v", c.id, got.Archived, c.archived)
+		}
+	}
+	if n, err := s.ArchiveFinished(ctx); err != nil || n != 0 {
+		t.Errorf("second ArchiveFinished = %d, %v; want 0", n, err)
+	}
+}
+
 // TestMigrateRetiresDoing opens a database made while doing was a
 // status and checks its doing tasks come back as todo, still open and
 // still theirs, with the other statuses untouched.

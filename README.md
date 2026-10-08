@@ -66,13 +66,15 @@ couple of seconds.
 
 In the browser: one list of areas, projects, tasks and subtasks, with a
 checkbox on each task and subtask and a chevron to fold an area or
-project. Ticking a task finishes it; unticking reopens it. A click
-on a row, or `enter`, opens its detail and actions in a drawer, and the
-terminal UI's other keys work too; `space` steps a row on as it does
-there. Set `http://127.0.0.1:7344/` as
-your browser's home page and leave `tasktracker --no-open` running, from
-a user service or a terminal you keep open; without the flag each start
-opens a browser tab.
+project. Ticking a task finishes it; unticking reopens it. A click on a
+row opens its form (a heading, which has none, opens its detail),
+`enter` opens its detail and actions in a drawer, and the terminal UI's
+other keys work too; `space` steps a row on as it does there. Archive
+finished, in the top bar, puts every finished task in an active project
+away in one click; Show archived lists them again. Set
+`http://127.0.0.1:7344/` as your browser's home page and leave
+`tasktracker --no-open` running, from a user service or a terminal you
+keep open; without the flag each start opens a browser tab.
 
 In the terminal UI: `n` add an area, `A` add a project, `a` add a task, `s` add a
 subtask, `c` copy a task, `e` edit, `space` step a task's status or tick a subtask, `x` drop
@@ -113,8 +115,9 @@ tasktracker task list --due --json
   database, the browser's in the browser's own storage.
 - **Browser UI** - `tasktracker` serves the same tree on
   `http://127.0.0.1:7344/`, laid out as a web page: a list with
-  checkboxes and chevrons, a drawer with the detail and actions, and
-  the keys below working as they do in the terminal. It is served on
+  checkboxes and chevrons, a form on click, a drawer with the detail
+  and actions on enter, a button that archives every finished task,
+  and the keys below working as they do in the terminal. It is served on
   this machine only. The page follows the database like the terminal UI
   does, so an agent's changes show up without a reload.
 - **By project or by deadline** - The tree groups tasks under their

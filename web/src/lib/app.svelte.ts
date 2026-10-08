@@ -195,6 +195,17 @@ export class AppState {
     this.shown = this.selectedTarget();
   }
 
+  /** A click on a row: its form, since a click on a thing is how a
+   * page changes it; a heading has no form, so its detail. During a
+   * write of the page's own the click only selects, as e does: a form
+   * cannot open under a reload whose answer always lands, and the
+   * drawer waits with it. */
+  open(): void {
+    if (!this.settled()) return;
+    if (this.selected()?.kind === "heading") this.openDrawer();
+    else this.edit();
+  }
+
   /** Enter: opens the selected row's detail, or closes it when it is
    * open, so the keyboard reaches what the drawer shows. Space steps
    * the row on, as it does in the terminal UI, where enter does the
@@ -1016,6 +1027,32 @@ export class AppState {
       return;
     }
     this.modal = { kind: "task", existing: null, projectId: r.task!.task.project_id, copyFrom: r.task! };
+  }
+
+  /** The Archive finished button: every finished task in an active
+   * project is put away in one go, so a page of ticked boxes clears in
+   * one click. The rows go and the selection lands near where it was, as
+   * after any reload. By deadline nothing is listed that could go, so
+   * the message says where they went, and with archived shown that
+   * list has them already, so f is not named. */
+  async archiveFinished(): Promise<void> {
+    if (!this.settled()) return;
+    this.clearMessages();
+    let n = 0;
+    const ok = await this.write(async () => {
+      n = (await this.api.archiveFinished()).archived;
+    });
+    if (!ok) return;
+    if (n === 0) {
+      this.say("no finished tasks to archive");
+      return;
+    }
+    const what = `archived ${n} finished ${n === 1 ? "task" : "tasks"}`;
+    if (this.view === "deadline") {
+      this.say(what + (this.showAll ? " (by project lists them)" : " (by project lists them with f)"));
+      return;
+    }
+    this.say(what + this.hiddenHint("archived"));
   }
 
   /** e: edits the selected row in its form. */
