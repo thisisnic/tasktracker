@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { Button, Notice, SegmentedControl, StatusBar, ThemeToggle, Toggle, TopBar } from "@kenn-io/kit-ui";
+  import { Button, DetailDrawer, Notice, SegmentedControl, StatusBar, ThemeToggle, Toggle, TopBar } from "@kenn-io/kit-ui";
   import { AppState } from "./lib/app.svelte";
   import type { View } from "./lib/rows";
   import RowList from "./components/RowList.svelte";
@@ -16,6 +16,15 @@
   onMount(() => {
     void app.start();
   });
+
+  // The drawer's header names the kind of row; the row's own name is
+  // the heading inside.
+  const drawerTitle = $derived.by(() => {
+    const r = app.selected();
+    if (!r) return "";
+    return r.kind === "heading" ? "Due" : r.kind[0]!.toUpperCase() + r.kind.slice(1);
+  });
+
 
   const views = [
     { value: "project", label: "By project" },
@@ -62,8 +71,10 @@
         app.toggleFold();
         break;
       case " ":
-      case "Enter":
         void app.advance();
+        break;
+      case "Enter":
+        app.toggleDrawer();
         break;
       case "x":
         void app.drop();
@@ -137,16 +148,18 @@
   {:else if !app.ready}
     <div class="pad muted">Loading…</div>
   {:else}
-    <div class="panes">
-      <section class="list" aria-label="Rows">
-        <RowList {app} />
-      </section>
-      <section class="detail" aria-label="Detail">
-        <Detail {app} />
-      </section>
-    </div>
+    <RowList {app} onopen={() => app.openDrawer()} />
   {/if}
 </main>
+
+<!-- The selected row's detail, opened by a click on a row and closed
+     with Escape, the overlay or its button. It is put away while a form
+     or question is open, so Escape closes that and not it. -->
+{#if app.drawer && app.selected() && !app.modal}
+  <DetailDrawer title={drawerTitle} onclose={() => app.closeDrawer()} width="min(480px, 100vw)">
+    <Detail {app} />
+  </DetailDrawer>
+{/if}
 
 <StatusBar>
   {#snippet left()}
@@ -188,8 +201,7 @@
   .main {
     flex: 1;
     min-height: 0;
-    display: flex;
-    flex-direction: column;
+    overflow: auto;
   }
 
   .pad {
@@ -198,24 +210,6 @@
 
   .muted {
     color: var(--text-muted);
-  }
-
-  .panes {
-    flex: 1;
-    min-height: 0;
-    display: grid;
-    grid-template-columns: minmax(0, 55fr) minmax(0, 45fr);
-  }
-
-  .list,
-  .detail {
-    min-height: 0;
-    overflow: auto;
-  }
-
-  .detail {
-    border-left: var(--border-width) solid var(--border-default);
-    padding: var(--space-3) var(--space-4);
   }
 
   .status {
@@ -235,16 +229,4 @@
     white-space: nowrap;
   }
 
-  @media (max-width: 720px) {
-    .panes {
-      grid-template-columns: minmax(0, 1fr);
-      grid-template-rows: minmax(0, 1fr) auto;
-    }
-
-    .detail {
-      border-left: none;
-      border-top: var(--border-width) solid var(--border-default);
-      max-height: 40%;
-    }
-  }
 </style>

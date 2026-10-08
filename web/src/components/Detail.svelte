@@ -1,9 +1,12 @@
 <script lang="ts">
-  import { Button } from "@kenn-io/kit-ui";
+  import { Button, Chip } from "@kenn-io/kit-ui";
+  import { CheckSquare, Square } from "@lucide/svelte";
   import { areaCounts, areaOpenTasks, isOpen, issueRef, nextState, nextStatus, openTasks, ticked, type Project } from "../lib/api";
   import type { AppState } from "../lib/app.svelte";
   import { bucketName, bucketSpan, daysUntil, dueWords, overdue, rowTarget } from "../lib/rows";
 
+  // The selected row in full, with its actions, for the drawer. The
+  // drawer's header carries the name; this is the rest.
   let { app }: { app: AppState } = $props();
 
   const row = $derived(app.selected());
@@ -19,101 +22,122 @@
     });
   }
 
-  function statusText(t: { status: string; archived?: boolean }): string {
-    return t.archived ? `${t.status} · archived` : t.status;
-  }
+  const statusTone = { todo: "neutral", doing: "warning", done: "success", dropped: "muted" } as const;
+
+  const name = $derived.by(() => {
+    if (!row) return "";
+    switch (row.kind) {
+      case "heading":
+        return bucketName(row.bucket!);
+      case "area":
+        return row.area!.area.name;
+      case "project":
+        return row.project!.project.name;
+      case "task":
+        return row.task!.task.title;
+      default:
+        return row.subtask!.title;
+    }
+  });
 </script>
 
 {#if row}
+<div class="body">
+  <h2>{name}</h2>
   {#if row.kind === "heading"}
     {@const b = row.bucket!}
-    <h2>{bucketName(b)}</h2>
     <dl>
-      <dt>due</dt>
+      <dt>Due</dt>
       <dd>{bucketSpan(b, app.today)}</dd>
-      <dt>tasks</dt>
+      <dt>Tasks</dt>
       <dd>{row.count} open</dd>
     </dl>
-    {#if folded}<p class="muted">collapsed; ← shows its tasks</p>{/if}
+    {#if folded}<p class="muted">Folded; its tasks are hidden.</p>{/if}
     <div class="actions">
       <Button size="sm" onclick={() => app.toggleFold()}>{folded ? "Unfold" : "Fold"}</Button>
     </div>
   {:else if row.kind === "area"}
     {@const a = row.area!}
     {@const counts = areaCounts(a)}
-    <h2>{a.area.name}</h2>
     <dl>
       {#if a.area.parent_id}
-        <dt>in</dt>
+        <dt>In</dt>
         <dd>{app.areaPath(a.area.parent_id)}</dd>
       {/if}
-      <dt>holds</dt>
-      <dd>{counts.areas} areas, {counts.projects} projects <span class="id">id #{a.area.id}</span></dd>
-      <dt>tasks</dt>
+      <dt>Holds</dt>
+      <dd>{counts.areas} areas, {counts.projects} projects</dd>
+      <dt>Tasks</dt>
       <dd>{areaOpenTasks(a)} open</dd>
+      <dt>Id</dt>
+      <dd>#{a.area.id}</dd>
     </dl>
-    {#if folded}<p class="muted">collapsed; ← shows what is in it</p>{/if}
+    {#if folded}<p class="muted">Folded; what is in it is hidden.</p>{/if}
     <div class="actions">
-      <Button size="sm" onclick={() => app.edit()}>Edit</Button>
+      <Button size="sm" surface="solid" tone="info" onclick={() => app.edit()}>Edit</Button>
       <Button size="sm" onclick={() => app.newProject()}>New project here</Button>
       <Button size="sm" onclick={() => app.newArea()}>New area here</Button>
       <Button size="sm" onclick={() => app.toggleFold()}>{folded ? "Unfold" : "Fold"}</Button>
+      <span class="spacer"></span>
       <Button size="sm" tone="danger" onclick={() => app.requestDelete()}>Delete</Button>
     </div>
   {:else if row.kind === "project"}
     {@const p = row.project!}
     {@const goals = goalLabels(p.project)}
-    <h2>{p.project.name}</h2>
     <dl>
       {#if p.project.area_id}
-        <dt>area</dt>
+        <dt>Area</dt>
         <dd>{app.areaPath(p.project.area_id)}</dd>
       {/if}
-      <dt>state</dt>
-      <dd>{p.project.state} <span class="id">id #{p.project.id}</span></dd>
-      <dt>tasks</dt>
+      <dt>State</dt>
+      <dd><Chip size="sm" tone={p.project.state === "active" ? "info" : "muted"}>{p.project.state}</Chip></dd>
+      <dt>Tasks</dt>
       <dd>{openTasks(p)} open, {p.tasks.length} listed</dd>
+      <dt>Id</dt>
+      <dd>#{p.project.id}</dd>
     </dl>
-    {#if folded}<p class="muted">collapsed; ← shows its tasks</p>{/if}
+    {#if folded}<p class="muted">Folded; its tasks are hidden.</p>{/if}
     {#if p.project.description}
-      <h3>about</h3>
+      <h3>About</h3>
       <p class="prose">{p.project.description}</p>
     {/if}
     {#if goals.length > 0}
-      <h3>goals</h3>
+      <h3>Goals</h3>
       <ul class="plain">
         {#each goals as g (g)}
           <li>{g}</li>
         {/each}
-        {#if !app.goals.readable}<li class="muted">(goaltracker not readable)</li>{/if}
       </ul>
+      {#if !app.goals.readable}<p class="muted">goaltracker's database could not be read, so the goals are shown by id.</p>{/if}
     {/if}
     <div class="actions">
-      <Button size="sm" onclick={() => app.edit()}>Edit</Button>
+      <Button size="sm" surface="solid" tone="info" onclick={() => app.edit()}>Edit</Button>
       <Button size="sm" onclick={() => app.newTask()}>New task</Button>
       <Button size="sm" onclick={() => void app.advance()}>Mark {nextState(p.project.state)}</Button>
       <Button size="sm" onclick={() => void app.drop()}>{p.project.state === "shelved" ? "Unshelve" : "Shelve"}</Button>
       <Button size="sm" onclick={() => app.toggleFold()}>{folded ? "Unfold" : "Fold"}</Button>
+      <span class="spacer"></span>
       <Button size="sm" tone="danger" onclick={() => app.requestDelete()}>Delete</Button>
     </div>
   {:else if row.kind === "task"}
     {@const t = row.task!}
     {@const days = daysUntil(t.task.due, app.today)}
     {@const issue = issueRef(t.task.issue)}
-    <h2>{t.task.title}</h2>
     <dl>
-      <dt>project</dt>
+      <dt>Project</dt>
       <dd>{row.project!.project.name}</dd>
-      <dt>status</dt>
-      <dd><span class={t.task.status}>{statusText(t.task)}</span> <span class="id">id #{t.task.id}</span></dd>
+      <dt>Status</dt>
+      <dd>
+        <Chip size="sm" tone={statusTone[t.task.status]}>{t.task.status}</Chip>
+        {#if t.task.archived}<Chip size="sm" tone="muted">archived</Chip>{/if}
+      </dd>
       {#if t.task.due}
-        <dt>due</dt>
+        <dt>Due</dt>
         <dd class:overdue={overdue(t.task, app.today)}>
-          {t.task.due}{#if days !== null && isOpen(t.task)}&nbsp;&nbsp;{dueWords(days)}{/if}
+          {t.task.due}{#if days !== null && isOpen(t.task)}<span class="muted">{dueWords(days)}</span>{/if}
         </dd>
       {/if}
       {#if t.task.issue}
-        <dt>issue</dt>
+        <dt>Issue</dt>
         <dd>
           {#if issue}
             <a href={issue.link} target="_blank" rel="noopener noreferrer">{issue.ref}</a>
@@ -122,80 +146,97 @@
           {/if}
         </dd>
       {/if}
+      <dt>Id</dt>
+      <dd>#{t.task.id}</dd>
     </dl>
     {#if t.subtasks.length > 0}
-      <h3>subtasks {ticked(t)}/{t.subtasks.length}</h3>
-      <ul class="plain">
+      <h3>Subtasks <span class="muted">{ticked(t)}/{t.subtasks.length}</span></h3>
+      <ul class="plain checks">
         {#each t.subtasks as s (s.id)}
-          <li><span class="box">[{s.done ? "x" : " "}]</span> {s.title}</li>
+          <li class:done={s.done}>
+            {#if s.done}<CheckSquare size={16} />{:else}<Square size={16} />{/if}
+            <span>{s.title}</span>
+          </li>
         {/each}
       </ul>
     {/if}
     {#if t.task.notes}
-      <h3>notes</h3>
+      <h3>Notes</h3>
       <p class="prose">{t.task.notes}</p>
     {/if}
     <div class="actions">
-      <Button size="sm" onclick={() => app.edit()}>Edit</Button>
+      <Button size="sm" surface="solid" tone="info" onclick={() => app.edit()}>Edit</Button>
       <Button size="sm" onclick={() => void app.advance()}>Mark {nextStatus(t.task.status)}</Button>
       <Button size="sm" onclick={() => void app.drop()}>{t.task.status === "dropped" ? "Undrop" : "Drop"}</Button>
       <Button size="sm" onclick={() => void app.archive()}>{t.task.archived ? "Unarchive" : "Archive"}</Button>
       <Button size="sm" onclick={() => app.newSubtask()}>New subtask</Button>
       <Button size="sm" onclick={() => app.copyTask()}>Copy</Button>
+      <span class="spacer"></span>
       <Button size="sm" tone="danger" onclick={() => app.requestDelete()}>Delete</Button>
     </div>
   {:else}
     {@const s = row.subtask!}
-    <h2>{s.title}</h2>
     <dl>
-      <dt>under</dt>
+      <dt>Under</dt>
       <dd>{row.task!.task.title}</dd>
-      <dt>project</dt>
+      <dt>Project</dt>
       <dd>{row.project!.project.name}</dd>
-      <dt>done</dt>
-      <dd>{s.done ? "ticked" : "not yet"} <span class="id">id #{s.id}</span></dd>
+      <dt>Done</dt>
+      <dd>{s.done ? "yes" : "not yet"}</dd>
+      <dt>Id</dt>
+      <dd>#{s.id}</dd>
     </dl>
     <div class="actions">
-      <Button size="sm" onclick={() => void app.advance()}>{s.done ? "Untick" : "Tick"}</Button>
+      <Button size="sm" surface="solid" tone="info" onclick={() => void app.advance()}>{s.done ? "Untick" : "Tick"}</Button>
       <Button size="sm" onclick={() => app.edit()}>Rename</Button>
+      <span class="spacer"></span>
       <Button size="sm" tone="danger" onclick={() => app.requestDelete()}>Delete</Button>
     </div>
   {/if}
+</div>
 {/if}
 
 <style>
-  h2 {
-    margin: 0 0 var(--space-3);
-    font-size: 1.1em;
-    overflow-wrap: anywhere;
+  .body {
+    padding: var(--space-5) var(--space-6) var(--space-6);
   }
 
-  h3 {
-    margin: var(--space-4) 0 var(--space-2);
-    font-size: 0.85em;
-    color: var(--accent-teal);
-    font-weight: var(--font-weight-medium);
+  h2 {
+    margin: 0 0 var(--space-5);
+    font-size: 1.15em;
+    font-weight: var(--font-weight-semibold);
+    overflow-wrap: anywhere;
   }
 
   dl {
     display: grid;
     grid-template-columns: max-content 1fr;
-    gap: var(--space-1) var(--space-3);
+    gap: var(--space-2) var(--space-4);
     margin: 0;
+    align-items: baseline;
   }
 
   dt {
-    color: var(--accent-teal);
+    color: var(--text-muted);
+    font-size: 0.85em;
   }
 
   dd {
     margin: 0;
     overflow-wrap: anywhere;
+    display: flex;
+    gap: var(--space-2);
+    align-items: center;
+    flex-wrap: wrap;
   }
 
-  .id {
+  h3 {
+    margin: var(--space-5) 0 var(--space-2);
+    font-size: 0.85em;
     color: var(--text-muted);
-    margin-left: var(--space-3);
+    font-weight: var(--font-weight-medium);
+    text-transform: var(--label-transform, uppercase);
+    letter-spacing: var(--letter-spacing-label, 0.04em);
   }
 
   .muted {
@@ -206,22 +247,11 @@
     color: var(--accent-red);
   }
 
-  .done {
-    color: var(--accent-green);
-  }
-
-  .doing {
-    color: var(--accent-amber);
-  }
-
-  .dropped {
-    color: var(--text-muted);
-  }
-
   .prose {
     white-space: pre-wrap;
     margin: 0;
     overflow-wrap: anywhere;
+    line-height: var(--line-height-prose, 1.5);
   }
 
   .plain {
@@ -230,14 +260,27 @@
     padding: 0;
   }
 
-  .box {
-    font-family: var(--font-mono);
+  .checks li {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) 0;
+  }
+
+  .checks li.done {
+    color: var(--text-muted);
   }
 
   .actions {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
-    margin-top: var(--space-5);
+    margin-top: var(--space-6);
+    padding-top: var(--space-4);
+    border-top: var(--border-width) solid var(--border-muted);
+  }
+
+  .spacer {
+    flex: 1;
   }
 </style>

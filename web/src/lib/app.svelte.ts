@@ -82,6 +82,10 @@ export class AppState {
   });
   cursor = $state(0);
   modal = $state<Modal | null>(null);
+  /** Whether the selected row's detail is open in the drawer. */
+  drawer = $state(false);
+  /** The row the drawer is showing, for telling a move from a loss. */
+  private shown: Target | null = null;
   status = $state("");
   error = $state("");
   /** error came from a poll, so a poll that goes well clears it. */
@@ -179,6 +183,45 @@ export class AppState {
       if (this.selected()?.kind === "heading" && !this.stepToTask(1)) this.stepToTask(-1);
     }
     this.clampCursor();
+    this.settleDrawer();
+  }
+
+  // ---- the drawer ----
+
+  /** Opens the selected row's detail. */
+  openDrawer(): void {
+    if (!this.selected()) return;
+    this.drawer = true;
+    this.shown = this.selectedTarget();
+  }
+
+  /** Enter: opens the selected row's detail, or closes it when it is
+   * open, so the keyboard reaches what the drawer shows. Space steps
+   * the row on, as it does in the terminal UI, where enter does the
+   * same; here enter opens, as it does in any list on the web. */
+  toggleDrawer(): void {
+    if (this.drawer) this.closeDrawer();
+    else this.openDrawer();
+  }
+
+  closeDrawer(): void {
+    this.drawer = false;
+    this.shown = null;
+  }
+
+  /** Keeps the drawer in step with the rows: it follows the selection
+   * as the keys move it, and closes once the row it showed is no longer
+   * listed, whether a write of the page's own, a change from elsewhere
+   * or a fold took it out, so it never slides on to whichever row the
+   * selection landed on next. Called wherever the rows or the selection
+   * change. */
+  private settleDrawer(): void {
+    if (!this.drawer) return;
+    if (this.shown && indexOf(this.rows, this.shown) < 0) {
+      this.closeDrawer();
+      return;
+    }
+    this.shown = this.selectedTarget();
   }
 
   /** The reload behind r: everything is read again, goals included,
@@ -221,6 +264,7 @@ export class AppState {
     this.today = today;
     if (keep) this.selectNear(keep);
     this.clampCursor();
+    this.settleDrawer();
   }
 
   /** Sets the status line to the action's message, then notes a change
@@ -397,6 +441,7 @@ export class AppState {
       this.status = "collapsed " + name + "; ← shows " + held + " again";
     }
     this.selectTarget(t);
+    this.settleDrawer();
   }
 
   /** Selects t, first expanding every fold around it, so a row folded
@@ -405,6 +450,7 @@ export class AppState {
   reveal(t: Target): void {
     for (const c of this.around(t)) if (this.isFolded(c)) this.unfold(c);
     this.selectTarget(t);
+    this.settleDrawer();
   }
 
   /** What t is inside in the current view, outermost first. */
@@ -466,21 +512,25 @@ export class AppState {
 
   select(i: number): void {
     if (i >= 0 && i < this.rows.length) this.cursor = i;
+    this.settleDrawer();
   }
 
   move(by: number): void {
     this.clearMessages();
     this.cursor = Math.min(Math.max(0, this.cursor + by), Math.max(0, this.rows.length - 1));
+    this.settleDrawer();
   }
 
   first(): void {
     this.clearMessages();
     this.cursor = 0;
+    this.settleDrawer();
   }
 
   last(): void {
     this.clearMessages();
     this.cursor = Math.max(0, this.rows.length - 1);
+    this.settleDrawer();
   }
 
   /** The area a new area or project goes in by default: the selected
@@ -554,6 +604,7 @@ export class AppState {
       if (this.view === "deadline") this.landByDeadline(from);
       else this.landByProject(from);
     }
+    this.settleDrawer();
   }
 
   /** Moves the cursor after switching to by deadline from a row that
@@ -870,7 +921,15 @@ export class AppState {
           return this.api.deleteSubtask(t.id);
       }
     };
+    // The drawer closes before the write, so it does not show the row
+    // being deleted meanwhile, and opens again if the delete did not
+    // happen and the row is still there to show: one deleted elsewhere
+    // in the meantime is gone from the rows the refusal reloads, and
+    // the drawer must not open on whichever row the selection landed on.
+    const shown = this.drawer ? this.shown : null;
+    this.closeDrawer();
     if (await this.write(del)) this.say(`deleted ${targetLabel(t)}`);
+    else if (shown && sameTarget(this.selectedTarget(), shown)) this.openDrawer();
   }
 
   // ---- forms ----
@@ -977,6 +1036,10 @@ export class AppState {
    * deadline, so the status says where it went. */
   async saved(t: Target, status: string): Promise<void> {
     this.modal = null;
+    // The reload may land before reveal unfolds the way to a row that
+    // was saved into a fold, and close the drawer as if the row had
+    // gone; it is opened again once the row is shown.
+    const shown = this.drawer ? this.shown : null;
     this.busy++;
     try {
       if (!(await this.tryReload(undefined, true))) return;
@@ -984,6 +1047,7 @@ export class AppState {
       this.busy--;
     }
     this.reveal(t);
+    if (shown && !this.drawer && sameTarget(this.selectedTarget(), t)) this.openDrawer();
     if (this.view === "deadline" && (t.kind === "area" || t.kind === "project")) status += " (v shows it by project)";
     this.say(status);
   }
@@ -1099,7 +1163,7 @@ export class AppState {
   /** The help line: the keys the page answers to, named for the view. */
   helpLine(): string {
     const keys =
-      "n area · A project · a task · s subtask · c copy task · e edit · space next status/tick · x drop · z archive · d delete · f show archived";
+      "n area · A project · a task · s subtask · c copy task · e edit · enter detail · space next status/tick · x drop · z archive · d delete · f show archived";
     if (this.view === "deadline") return keys + " · v by project · ←/→ fold/unfold · j/k move";
     return keys + " · v by deadline · ←/→ fold/unfold · j/k move";
   }

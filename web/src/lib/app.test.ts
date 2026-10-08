@@ -311,6 +311,20 @@ describe("finishing a task", () => {
   });
 });
 
+describe("stepping a project", () => {
+  it("asks before marking it done, which hides it", async () => {
+    const { app, fake } = await open();
+    selectKey(app, "project:1");
+    await app.advance();
+    const m = app.modal;
+    if (m?.kind !== "confirmState") throw new Error(`modal is ${m?.kind}`);
+    expect(app.stateQuestion(m.row)).toBe("mark done project #1 “house” and hide it with every task in it?");
+    await app.confirm(true);
+    expect(fake.calls).toEqual(['editProject 1 {"state":"done"}']);
+    expect(app.status).toBe("project #1 done (hidden; f shows finished)");
+  });
+});
+
 describe("archiving", () => {
   it("hides the task and keeps the cursor's place", async () => {
     const { app, fake } = await open();
@@ -423,6 +437,139 @@ describe("folding", () => {
     app.folds = { "project:1": "2025-12-31T00:00:00Z", "project:99": "2026-01-01T00:00:00Z", "heading:1": "" };
     await app.reload();
     expect(app.folds).toEqual({ "project:99": "2026-01-01T00:00:00Z", "heading:1": "" });
+  });
+});
+
+describe("the drawer", () => {
+  it("opens and closes with enter, and follows the selection as the keys move it", async () => {
+    const { app } = await open();
+    selectKey(app, "task:1");
+    app.toggleDrawer();
+    expect(app.drawer).toBe(true);
+    app.toggleDrawer();
+    expect(app.drawer).toBe(false);
+    app.toggleDrawer();
+    app.move(1);
+    expect(app.drawer).toBe(true);
+    expect(selected(app)).toBe("subtask:1");
+    app.toggleView();
+    expect(app.drawer).toBe(true);
+    app.closeDrawer();
+    expect(app.drawer).toBe(false);
+  });
+
+  it("closes when the row it showed is hidden by a write of the page's own", async () => {
+    const { app } = await open();
+    selectKey(app, "task:5");
+    app.openDrawer();
+    await app.archive();
+    expect(app.status).toBe("task #5 archived (hidden; f shows archived)");
+    expect(app.drawer).toBe(false);
+    // A write that keeps the row listed keeps the drawer.
+    selectKey(app, "task:2");
+    app.openDrawer();
+    await app.advance();
+    expect(selected(app)).toBe("task:2");
+    expect(app.drawer).toBe(true);
+  });
+
+  it("closes when a task finished by deadline leaves the list", async () => {
+    const { app, fake } = await open();
+    doing(fake, 2);
+    await app.reload();
+    app.toggleView();
+    selectKey(app, "task:2");
+    app.openDrawer();
+    await app.advance();
+    expect(selected(app)).toBe("task:3");
+    expect(app.drawer).toBe(false);
+  });
+
+  it("closes when a change from elsewhere takes the row away", async () => {
+    const { app, fake } = await open();
+    selectKey(app, "task:4");
+    app.openDrawer();
+    fake.version = 2;
+    fake.data.projects[0]!.tasks = [];
+    await app.poll();
+    expect(app.drawer).toBe(false);
+    expect(app.status).toBe("changed elsewhere, reloaded");
+  });
+
+  it("closes when a fold hides the row", async () => {
+    const { app } = await open();
+    selectKey(app, "task:1");
+    app.openDrawer();
+    app.toggleFold();
+    expect(selected(app)).toBe("project:1");
+    expect(app.drawer).toBe(false);
+  });
+
+  it("stays open on a row saved into a fold, which the save unfolds", async () => {
+    const { app, fake } = await open();
+    app.folds = { "project:2": "2026-01-04T00:00:00Z" };
+    selectKey(app, "task:1");
+    app.openDrawer();
+    // Moved into the folded maintenance project; tree order puts it
+    // before house's tasks now.
+    fake.data.areas[0]!.projects[0]!.tasks[0]!.task.project_id = 2;
+    const [moved] = fake.data.areas[0]!.projects[0]!.tasks.splice(0, 1);
+    fake.data.areas[0]!.areas[0]!.projects[0]!.tasks.push(moved!);
+    await app.saved({ kind: "task", id: 1 }, "saved task #1");
+    expect(app.folds).toEqual({});
+    expect(selected(app)).toBe("task:1");
+    expect(app.drawer).toBe(true);
+    expect(app.status).toBe("saved task #1");
+
+    // By deadline, into a folded bucket: task 2 goes from this week to
+    // Longer, which is folded.
+    app.toggleView();
+    app.folds = { "heading:4": "" };
+    expect(app.rows.map((r) => key(rowTarget(r)))).not.toContain("task:3");
+    selectKey(app, "task:2");
+    app.openDrawer();
+    fake.data.areas[0]!.projects[0]!.tasks[0]!.task.due = "2026-12-02";
+    await app.saved({ kind: "task", id: 2 }, "saved task #2");
+    expect(app.folds).toEqual({});
+    expect(selected(app)).toBe("task:2");
+    expect(app.drawer).toBe(true);
+  });
+
+  it("closes on a delete, and opens again when the delete was refused", async () => {
+    const { app, fake } = await open();
+    selectKey(app, "task:1");
+    app.openDrawer();
+    app.requestDelete();
+    await app.confirm(true);
+    expect(app.drawer).toBe(false);
+    expect(fake.calls).toEqual(["deleteTask 1"]);
+
+    const page = new AppState({ ...fake.client(), deleteTask: () => Promise.reject(new Error("locked")) }, () => new Date("2026-10-07T12:00:00"));
+    await page.reload();
+    selectKey(page, "task:2");
+    page.openDrawer();
+    page.requestDelete();
+    await page.confirm(true);
+    expect(page.drawer).toBe(true);
+    expect(selected(page)).toBe("task:2");
+    expect(page.error).toBe("locked");
+    expect(page.status).toBe("");
+  });
+
+  it("stays closed when a refused delete finds the row already gone elsewhere", async () => {
+    const { fake } = await open();
+    const page = new AppState({ ...fake.client(), deleteTask: () => Promise.reject(new Error("not found")) }, () => new Date("2026-10-07T12:00:00"));
+    await page.reload();
+    selectKey(page, "task:2");
+    page.openDrawer();
+    // The CLI deleted task 2 before the question was answered; the
+    // refusal's reload drops it and the selection keeps its place.
+    fake.data.areas[0]!.projects[0]!.tasks.pop();
+    page.requestDelete();
+    await page.confirm(true);
+    expect(page.error).toBe("not found");
+    expect(selected(page)).toBe("project:3");
+    expect(page.drawer).toBe(false);
   });
 });
 

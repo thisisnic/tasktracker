@@ -186,7 +186,8 @@ Layout, to be adjusted as it gets used:
 
 - A tree pane: areas, then projects as headers, their tasks indented under
   them, and subtasks under tasks with a tick box. A detail pane for the
-  selected item. The page lays the same two panes out side by side.
+  selected item. The page has the same tree, with the detail in a
+  drawer instead of a pane.
 - The same pane arranged by deadline: every open task as one list,
   soonest due first, undated tasks last, subtasks still under their task
   and the project name after the title. The list is split under headings
@@ -347,14 +348,21 @@ which went this way first, so the two feel the same.
   it holds and says whether it could be read, so the page offers a pick
   list when it can and typed ids when it cannot, as the terminal UI's
   form does, and shows the ids bare in the detail when it cannot.
-- The page is the terminal UI laid out for a browser: the same two
-  panes, the same rows in the same order, the same detail, the same
-  status line wording, and the same keys, with the actions also as
-  buttons under the detail for the mouse. The rules for where the
-  selection lands after a change are ported line for line, so the two
-  UIs agree and there is one set of rules to reason about. A form sends
-  only the fields that changed, so a stored issue the server would
-  refuse does not block an edit, as the terminal UI's form keeps it.
+- The page shares the terminal UI's behaviour, not its looks. The rows
+  come in the same order, the keys do the same things, the status line
+  says the same words, and the rules for where the selection lands
+  after a change are ported line for line, so the two UIs agree and
+  there is one set of rules to reason about. How it looks follows web
+  practice instead: one list in the page's own typeface, checkboxes
+  for subtasks, a chevron to fold, a chip for a due date, and a drawer
+  that opens on a click, or on enter, with the detail and the actions
+  as buttons. Enter opens, as it does in any list on the web, where the
+  terminal UI has it step the row on like space; space still does. A
+  first version copied the terminal UI's two panes, monospace and
+  glyphs, and read as a terminal in a browser, which was not the point
+  of having a page. A form sends only the fields that changed, so a
+  stored issue the server would refuse does not block an edit, as the
+  terminal UI's form keeps it.
 - The page's folds live in the browser's storage, not the terminal
   UI's file. Folds are the state of a screen, and the page's screen is
   the browser; the two UIs are different screens and keep their own
