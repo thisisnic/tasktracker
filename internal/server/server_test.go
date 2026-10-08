@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -109,8 +110,16 @@ func TestMetaAndOutline(t *testing.T) {
 	srv, _ := setup(t)
 	var m Meta
 	want(t, srv, 200, "GET", "/api/meta", nil, &m)
-	if m.Version != "test" {
+	files, _ := fs.Sub(dist, "dist")
+	if m.Version != "test" || m.Page != pageID(files) {
 		t.Errorf("meta = %+v", m)
+	}
+	// The epoch in meta is the one the version starts with, so the page
+	// can pair the build with the process from one answer.
+	var v0 Version
+	want(t, srv, 200, "GET", "/api/version", nil, &v0)
+	if m.Epoch == "" || !strings.HasPrefix(v0.Version, m.Epoch+".") {
+		t.Errorf("meta epoch %q, version %q", m.Epoch, v0.Version)
 	}
 
 	var o OutlineResponse
@@ -595,8 +604,17 @@ func TestUI(t *testing.T) {
 			t.Errorf("%s: X-Frame-Options %q, Content-Security-Policy %q", path, xfo, csp)
 		}
 	}
+	// A build is named by its index.html; no build, no name.
+	if id := pageID(fstest.MapFS{}); id != "" {
+		t.Errorf("pageID without a build = %q", id)
+	}
+	one := pageID(fstest.MapFS{"index.html": {Data: []byte("<html>page</html>")}})
+	two := pageID(fstest.MapFS{"index.html": {Data: []byte("<html>page 2</html>")}})
+	if len(one) != 16 || one == two {
+		t.Errorf("pageID = %q, %q", one, two)
+	}
 	// Without a build, the page says so.
-	none := httptest.NewServer(uiHandler(fstest.MapFS{}))
+	none := httptest.NewServer(uiHandler(fstest.MapFS{}, ""))
 	defer none.Close()
 	if code, b := do(t, none, "GET", "/", nil); code != 503 || !strings.Contains(string(b), "no UI") {
 		t.Errorf("no build: %d %s", code, b)
@@ -607,7 +625,7 @@ func TestUI(t *testing.T) {
 		"index.html":       {Data: []byte("<html>page</html>")},
 		"assets/app.js":    {Data: []byte("js")},
 		"assets/style.css": {Data: []byte("css")},
-	}))
+	}, "abc"))
 	defer built.Close()
 	for path, want := range map[string]string{"/": "<html>page</html>", "/assets/app.js": "js", "/elsewhere": "<html>page</html>", "/deeper/still": "<html>page</html>", "/assets": "<html>page</html>"} {
 		if code, b := do(t, built, "GET", path, nil); code != 200 || string(b) != want {
@@ -618,6 +636,19 @@ func TestUI(t *testing.T) {
 	// upgrade asking for its old assets is told so rather than given HTML.
 	if code, _ := do(t, built, "GET", "/assets/old.js", nil); code != 404 {
 		t.Errorf("missing asset: %d", code)
+	}
+	// The page is told which build it is, wherever it is served from,
+	// and the name is the one /api/meta gives, which is the hash of the
+	// file as built, before the name went in.
+	src := fstest.MapFS{"index.html": {Data: []byte(`<html><meta name="page" content="" />page</html>`)}}
+	id := pageID(src)
+	named := httptest.NewServer(uiHandler(src, id))
+	defer named.Close()
+	for _, path := range []string{"/", "/index.html", "/deeper/still"} {
+		code, b := do(t, named, "GET", path, nil)
+		if code != 200 || !strings.Contains(string(b), `<meta name="page" content="`+id+`" />`) {
+			t.Errorf("%s: %d %q, want the build name %q in it", path, code, b, id)
+		}
 	}
 }
 

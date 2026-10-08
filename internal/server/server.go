@@ -11,8 +11,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +46,7 @@ type Options struct {
 type Server struct {
 	store   *task.Store
 	version string
+	page    string // names the page build served, see Meta
 	mux     *http.ServeMux
 	ui      http.Handler
 	// writes counts the mutations this server has made. SQLite's data
@@ -65,9 +69,23 @@ func New(o Options) *Server {
 	if err != nil {
 		panic(err)
 	}
-	s.ui = uiHandler(files)
+	s.page = pageID(files)
+	s.ui = uiHandler(files, s.page)
 	s.routes()
 	return s
+}
+
+// pageID names the page build in files: the first bytes of a hash of
+// its index.html, or empty without a build. Every build of the page
+// has an index.html of its own, since the asset names it links carry
+// their content's hash.
+func pageID(files fs.FS) string {
+	b, err := fs.ReadFile(files, "index.html")
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:8])
 }
 
 func (s *Server) routes() {
@@ -233,27 +251,32 @@ func sameOrigin(origin, host string) bool {
 // absolute, so it loads from there. A path that looks like a file gets
 // 404, so a stale page asking for an asset from before an upgrade is
 // told so rather than handed HTML. A directory is not listed. Without
-// a build, every path gets a notice saying so.
-func uiHandler(files fs.FS) http.Handler {
-	if _, err := fs.Stat(files, "index.html"); err != nil {
+// a build, every path gets a notice saying so. page, the build's name,
+// is put into index.html where its meta tag leaves room, so the page
+// knows which build its own code is and need not take the server's
+// word for it; a server that restarted on a new build between the
+// browser loading the page and asking /api/meta would else go
+// unnoticed.
+func uiHandler(files fs.FS, page string) http.Handler {
+	index, err := fs.ReadFile(files, "index.html")
+	if err != nil {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			io.WriteString(w, "This build has no UI. Build one with `make build`, which builds the web app under web/ first, or use `tasktracker tui` or the CLI; the API is under /api/.\n")
 		})
 	}
+	index = bytes.Replace(index, []byte(`name="page" content=""`), []byte(`name="page" content="`+page+`"`), 1)
 	static := http.FileServer(http.FS(files))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/")
-		if p == "" {
-			p = "index.html"
-		}
-		if info, err := fs.Stat(files, p); err != nil || info.IsDir() {
-			if path.Ext(p) != "" {
+		if info, err := fs.Stat(files, p); p == "" || p == "index.html" || err != nil || info.IsDir() {
+			if path.Ext(p) != "" && p != "index.html" {
 				http.NotFound(w, r)
 				return
 			}
-			r.URL.Path = "/"
+			http.ServeContent(w, r, "index.html", time.Time{}, bytes.NewReader(index))
+			return
 		}
 		static.ServeHTTP(w, r)
 	})
@@ -347,10 +370,20 @@ func idOf(r *http.Request) (int64, error) {
 // Meta is what the UI shows about the binary serving it.
 type Meta struct {
 	Version string `json:"version"`
+	// Page names the page build served, so a page left open can tell
+	// when the server came back serving another one, whatever the
+	// version says, and load itself afresh. Empty without a build.
+	Page string `json:"page"`
+	// Epoch names this process, as the first part of Version does, so
+	// the page takes the build and the process serving it from one
+	// answer: read from two, a restart between them would pair the old
+	// build with the new process, and the poll would never look again.
+	// A string, since the number is past what the page's numbers hold.
+	Epoch string `json:"epoch"`
 }
 
 func (s *Server) meta(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, Meta{Version: s.version})
+	writeJSON(w, http.StatusOK, Meta{Version: s.version, Page: s.page, Epoch: strconv.FormatInt(s.epoch, 10)})
 }
 
 // Version names the state of the database as this server has seen it:

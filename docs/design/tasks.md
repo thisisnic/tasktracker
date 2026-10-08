@@ -362,6 +362,13 @@ which went this way first, so the two feel the same.
   active project in one UPDATE; a finished project is out of sight with
   everything in it already. It is the page's alone until a scope is
   missed.
+- A page left open across an upgrade loads itself afresh: when the
+  server has restarted, the poll compares the page build it serves with
+  the one in the browser, since old page code fails quietly against a
+  new API. The build is named by a hash of its index.html, so a source
+  build counts as much as a release, and the server writes the name
+  into the page it serves, so the page knows its own build rather than
+  taking the server's word at its first load.
 - The page's folds live in the browser's storage, not the terminal
   UI's file. Folds are the state of a screen, and the page's screen is
   the browser; the two UIs are different screens and keep their own

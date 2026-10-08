@@ -11,6 +11,9 @@ class Fake {
   data = fixture();
   /** The server process, which the test changes for a restart. */
   epoch = 1;
+  /** The page build the fake server says it serves, and the binary. */
+  page = "p1";
+  binary = "test";
   /** SQLite's data version, which the test moves for a write elsewhere. */
   version = 1;
   /** The server's own write count, which the fake's writes move. */
@@ -65,7 +68,7 @@ class Fake {
   client(): Client {
     const notImplemented = () => Promise.reject(new Error("not in the fake"));
     return {
-      meta: async () => ({ version: "test" }),
+      meta: async () => ({ version: this.binary, page: this.page, epoch: String(this.epoch) }),
       version: async () => {
         if (this.down) throw new Error("Failed to fetch");
         if (this.holdVersion) await new Promise<void>((r) => this.heldVersions.push(r));
@@ -184,7 +187,9 @@ async function open(): Promise<{ app: AppState; fake: Fake; clock: { date: strin
   const fake = new Fake();
   const clock = { date: "2026-10-07" };
   const app = new AppState(fake.client(), () => new Date(`${clock.date}T12:00:00`));
+  // What start would do without the poll: the rows and the page served.
   await app.reload();
+  app.page = fake.page;
   return { app, fake, clock };
 }
 
@@ -756,7 +761,7 @@ describe("the first load", () => {
       ...fake.client(),
       meta: async () => {
         if (++calls === 1) throw new Error("Failed to fetch");
-        return { version: "test" };
+        return { version: "test", page: "p1", epoch: "1" };
       },
     };
     const app = new AppState(client, () => new Date("2026-10-07T12:00:00"));
@@ -1075,6 +1080,88 @@ describe("changes from elsewhere", () => {
     await app.poll();
     expect(app.rows.find((r) => key(rowTarget(r)) === "task:2")?.task?.task.status).toBe("done");
     expect(app.status).toBe("changed elsewhere, reloaded");
+  });
+
+  it("made by a server serving another page build make the page load itself afresh", async () => {
+    const fake = new Fake();
+    let restarted = 0;
+    const app = new AppState(fake.client(), () => new Date("2026-10-07T12:00:00"), () => restarted++);
+    await app.start();
+    expect(app.version).toBe("test");
+    // A restart of the same build is a reload, as above; the top bar
+    // takes the new binary's version, as a release without a page
+    // change serves the same build.
+    fake.epoch = 2;
+    fake.binary = "v2";
+    await app.poll();
+    expect(restarted).toBe(0);
+    expect(app.status).toBe("changed elsewhere, reloaded");
+    expect(app.version).toBe("v2");
+    // A restart serving another page build: this page's code is stale,
+    // so it is loaded afresh rather than reloaded.
+    fake.epoch = 3;
+    fake.page = "p2";
+    finish(fake, 2);
+    await app.poll();
+    expect(restarted).toBe(1);
+    expect(app.rows.find((r) => key(rowTarget(r)) === "task:2")?.task?.task.status).toBe("todo");
+  });
+
+  it("before the first load's meta answer make the page load itself afresh", async () => {
+    const fake = new Fake();
+    let restarted = 0;
+    // The page knows its own build, as the server names it in index.html.
+    const same = new AppState(fake.client(), () => new Date("2026-10-07T12:00:00"), () => restarted++, "p1");
+    await same.start();
+    expect(restarted).toBe(0);
+    expect(same.ready).toBe(true);
+    // A page from an earlier build, answered by a server on this one.
+    const stale = new AppState(fake.client(), () => new Date("2026-10-07T12:00:00"), () => restarted++, "p0");
+    await stale.start();
+    expect(restarted).toBe(1);
+    expect(stale.ready).toBe(false);
+    expect(stale.fatal).toBe("");
+  });
+
+  it("between the first load's two requests still make the page load itself afresh", async () => {
+    // A page that does not know its own build, as under the dev server.
+    const fake = new Fake();
+    let restarted = 0;
+    const client = fake.client();
+    const app = new AppState(
+      {
+        ...client,
+        meta: async () => {
+          const meta = await client.meta();
+          // The server restarts serving another build after the old
+          // one's meta has been answered and before the outline is asked.
+          fake.epoch = 2;
+          fake.page = "p2";
+          return meta;
+        },
+      },
+      () => new Date("2026-10-07T12:00:00"),
+      () => restarted++,
+    );
+    await app.start();
+    expect(app.page).toBe("p1");
+    expect(restarted).toBe(0);
+    // The poll sees a process other than the one the build came from,
+    // and the build served now is another one.
+    await app.poll();
+    expect(restarted).toBe(1);
+  });
+
+  it("make the page load itself afresh even when its own reload saw the restart first", async () => {
+    const fake = new Fake();
+    let restarted = 0;
+    const app = new AppState(fake.client(), () => new Date("2026-10-07T12:00:00"), () => restarted++);
+    await app.start();
+    fake.epoch = 2;
+    fake.page = "p2";
+    await app.refresh(); // r: the rows now carry the new server's version
+    await app.poll();
+    expect(restarted).toBe(1);
   });
 
   it("are noted after f, which reloads", async () => {

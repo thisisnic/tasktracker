@@ -70,6 +70,12 @@ export interface OutlineResponse {
 
 export interface Meta {
   version: string;
+  /** Names the page build served; another one means this page's code
+   * is stale. */
+  page: string;
+  /** Names the server process serving that build, as the first part of
+   * a version does. */
+  epoch: string;
 }
 
 /** The fields of a task an edit or a copy may change. A missing field

@@ -11,7 +11,11 @@
   import SubtaskForm from "./components/SubtaskForm.svelte";
   import Confirm from "./components/Confirm.svelte";
 
-  const app = new AppState();
+  // The build this page's code is from, as the server named it in
+  // index.html; empty under the dev server, which serves the file as
+  // written, and then the server's word is taken.
+  const page = document.querySelector('meta[name="page"]')?.getAttribute("content") ?? "";
+  const app = new AppState(undefined, undefined, undefined, page);
 
   onMount(() => {
     void app.start();

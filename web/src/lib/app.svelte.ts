@@ -61,8 +61,19 @@ const POLL_MS = 2000;
 
 export class AppState {
   private api: Client;
-  /** The version of the binary serving the page, for the top bar. */
+  /** The version of the binary serving the page, for the top bar; a
+   * restart on the same page build brings the new binary's. */
   version = $state("");
+  /** The build this page's code is from, as the server named it in
+   * index.html; when the page does not know, as under the dev server,
+   * the first meta answer's word is taken. */
+  page = "";
+  /** The server process the page build was last checked against, taken
+   * with the build from the same meta answer, so a restart between two
+   * requests cannot pair the old build with the new process. Its own
+   * field, since loaded moves with the page's own reloads and would
+   * hide a restart from the poll. */
+  private epoch = "";
   outline = $state<Outline>({ areas: [], projects: [] });
   /** Every area, flat, for paths and pick lists. */
   areas = $derived(flatAreas(this.outline));
@@ -113,11 +124,22 @@ export class AppState {
   /** The clock the date is read from; tests pin it. */
   private now: () => Date;
 
-  constructor(api: Client = realApi, now: () => Date = () => new Date()) {
+  /** restart loads the page afresh, for a server that came back as a
+   * newer build; page is the build this code is from, if known. */
+  constructor(
+    api: Client = realApi,
+    now: () => Date = () => new Date(),
+    restart: () => void = () => location.reload(),
+    page = "",
+  ) {
     this.api = api;
     this.now = now;
+    this.restart = restart;
+    this.page = page;
     this.today = todayStr(now());
   }
+
+  private restart: () => void;
 
   // ---- loading ----
 
@@ -129,7 +151,16 @@ export class AppState {
     if (this.pollTimer) clearTimeout(this.pollTimer);
     try {
       this.loadFolds();
-      this.version = (await this.api.meta()).version;
+      const meta = await this.api.meta();
+      if (this.page !== "" && meta.page !== this.page) {
+        // The server came back on another build between serving this
+        // page and answering it: this code is already stale.
+        this.restart();
+        return;
+      }
+      this.version = meta.version;
+      this.page = meta.page;
+      this.epoch = meta.epoch;
       await this.refresh();
       this.fatal = "";
       this.ready = true;
@@ -314,6 +345,19 @@ export class AppState {
       this.turnOfDay();
       const { version } = await this.api.version();
       if (!this.idle()) return;
+      if (epochOf(version) !== this.epoch) {
+        // The server has restarted. If it came back serving another
+        // page build, this page's code is stale, and it would fail
+        // quietly against the new API: load the page afresh instead.
+        const meta = await this.api.meta();
+        if (!this.idle()) return;
+        if (meta.page !== this.page) {
+          this.restart();
+          return;
+        }
+        this.version = meta.version;
+        this.epoch = meta.epoch;
+      }
       if (version !== this.loaded) {
         await this.reload();
         this.noteChangedElsewhere();
@@ -1229,6 +1273,13 @@ export interface TaskFields {
   notes: string;
   status: Status;
   project: number;
+}
+
+/** The server's start time in a version it reports, before the first
+ * dot: it changes when the server restarts. */
+function epochOf(version: string): string {
+  const i = version.indexOf(".");
+  return i < 0 ? version : version.slice(0, i);
 }
 
 /** The state of the database in a version the server reports: the

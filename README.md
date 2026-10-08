@@ -117,7 +117,8 @@ tasktracker task list --due --json
   and actions on enter, a button that archives every finished task,
   and the keys below working as they do in the terminal. It is served on
   this machine only. The page follows the database like the terminal UI
-  does, so an agent's changes show up without a reload.
+  does, so an agent's changes show up without a reload, and a page left
+  open across an upgrade loads itself afresh.
 - **By project or by deadline** - The tree groups tasks under their
   projects. Press `v` for the open tasks as one list under the headings
   Overdue, Next 7 days, Next 30 days, Longer and No deadline, soonest
