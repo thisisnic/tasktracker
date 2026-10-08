@@ -244,9 +244,10 @@ so in one line.
 - The rule is "did the database change while the UI was open", by the UI
   or by another process it saw, not "is the backup up to date". A change
   made by the CLI while no UI was open is kept by the next session that
-  changes something, or by running the backup command, which checks the
-  database itself. That trade is taken knowingly: the on-quit backup is a
-  convenience for the common case, and the command is there for the rest.
+  changes something, by the server's next scheduled run, or by running
+  the backup command; the last two check the database itself. That
+  trade is taken knowingly: the on-quit backup is a convenience for the
+  common case, and the server and the command are there for the rest.
 - A write that fails, a cancelled form and a declined confirmation do
   not count; a save that changed nothing does, since the store was
   written to.
@@ -371,12 +372,27 @@ which went this way first, so the two feel the same.
   id. A fold whose row is not listed is kept rather than pruned, since
   a finished project hidden until `f` still exists; checking every
   project would be another request per reload for nothing.
-- No backup when the server stops. The terminal UI backs up on quit
-  because quitting ends a session of changes; the server is left running
-  for days as a home page, and stopping it is not the end of anything,
-  so a snapshot then would be rare and badly timed. `tasktracker backup`
-  and the terminal UI's quit cover it, and whether the server should
-  back up on a schedule is an open question.
+- The server backs up on a schedule, not when it stops. The terminal UI
+  backs up on quit because quitting ends a session of changes; the
+  server is left running for days as a home page, and stopping it is
+  not the end of anything, so a snapshot then would be rare and badly
+  timed. Instead, with `[backup]` configured, the serving process backs
+  up once as it starts and then every 12 hours for as long as it runs.
+  The start-up run catches changes made from the CLI while nothing was
+  serving; the marker makes a quiet run free. The 12 hours are
+  wall-clock time, checked hourly: Go's timers stop with the machine, so
+  a plain 12-hour ticker on a laptop would count only hours awake. A
+  failed run is reported on stderr and retried when the interval next
+  passes rather than stopping the server; a run cut short by shutdown is
+  not reported as a failure, though a commit that landed without its
+  push still says so, since the next run pushes it. The interval is
+  fixed: there is nothing to tune until use shows otherwise. A broken
+  config starts no loop, since it names no backup folder; the note that
+  the config is being ignored covers it. `tasktracker backup` is still
+  there for a snapshot right now, and shares the marker. The two can
+  overlap: both would write the same snapshot, and with `git = true` one
+  may lose to the other's index lock. The automatic run simply retries
+  later; a manual run that fails that way is rerun by hand.
 - The page is built into the binary. Releases build it first, so the
   downloaded binary serves it; a plain `go install` cannot, and serves a
   notice saying so in its place. Needing bun to build from source is the
@@ -392,9 +408,6 @@ which went this way first, so the two feel the same.
    catch-all project is one way round it if that turns out to be annoying.
 3. **What "done" means for a project.** Whether a project can be marked
    done while it still has open tasks is left open; nothing stops it.
-4. **Backups while serving.** The server never backs up. If the browser
-   becomes the main way in, a daily snapshot from the server, or one
-   after a quiet spell following a change, may be wanted.
-5. **Release notices while serving.** The page shows none. A server
+4. **Release notices while serving.** The page shows none. A server
    that checks daily and a line in the page's top bar would match what
    the terminal UI does.

@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -65,7 +67,10 @@ func backupCmd(dbPath, cfgPath *string) *cobra.Command {
 		Long: `Write a consistent, encrypted copy of the database as tasktracker.db.age in the
 backup folder, replacing the previous one. Nothing is written if the
 database is unchanged since the last backup. The folder and key come from
-the config file unless given here.`,
+the config file unless given here.
+
+The serving process does this itself: once when it starts and then every
+12 hours, as long as a backup folder and key are configured.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := config.Load(*cfgPath)
@@ -86,7 +91,7 @@ the config file unless given here.`,
 				return err
 			}
 			defer store.Close()
-			return runBackup(cmd, store, *dbPath, cfg.Backup)
+			return runBackup(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), store, *dbPath, cfg.Backup)
 		},
 	}
 	cmd.Flags().StringVar(&dir, "dir", "", "backup folder (overrides config)")
@@ -94,9 +99,55 @@ the config file unless given here.`,
 	return cmd
 }
 
-// runBackup takes a snapshot and reports what happened on stdout.
-func runBackup(cmd *cobra.Command, store *task.Store, dbPath string, b config.Backup) error {
-	res, err := backup.Run(cmd.Context(), store, backup.Options{
+// autoBackupEvery is how often the serving process backs up the database,
+// in wall-clock time. autoBackupPoll is how often it checks whether that
+// much has passed: a ticker alone would not do, because Go's timers run on
+// the monotonic clock, which stops while a laptop is asleep, so a 12-hour
+// ticker would count only hours awake. autoBackupNow is the wall clock
+// it compares. All three are variables so tests can shorten the
+// intervals and move the clock.
+var (
+	autoBackupEvery = 12 * time.Hour
+	autoBackupPoll  = time.Hour
+	autoBackupNow   = time.Now
+)
+
+// autoBackup backs up the database when serving starts and then whenever
+// autoBackupEvery has passed since the last run, until ctx ends.
+// backup.Run skips an unchanged database, so a quiet run writes nothing
+// and only a change costs a snapshot. A failed backup is reported on errw
+// and tried again when the interval next passes; it never stops the
+// server. The run in flight when ctx ends is cut short and not reported
+// as a failure: the caller is shutting down, not failing. (A commit that
+// landed but could not be pushed is still mentioned, since the next run
+// pushes it.)
+func autoBackup(ctx context.Context, out, errw io.Writer, s *task.Store, dbPath string, b config.Backup) {
+	tick := time.NewTicker(autoBackupPoll)
+	defer tick.Stop()
+	var last time.Time
+	for {
+		// Round(0) strips the monotonic reading, so the comparison below
+		// is between wall-clock times and counts time spent asleep. A
+		// clock set back since the last run starts the schedule over
+		// rather than waiting for it to catch up.
+		if now := autoBackupNow().Round(0); last.IsZero() || now.Before(last) || now.Sub(last) >= autoBackupEvery {
+			last = now
+			if err := runBackup(ctx, out, errw, s, dbPath, b); err != nil && ctx.Err() == nil {
+				fmt.Fprintf(errw, "%v; trying again in %s\n", err, autoBackupEvery)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+	}
+}
+
+// runBackup takes a snapshot and reports what happened on out; a push
+// that failed after its commit is a warning on errw, not an error.
+func runBackup(ctx context.Context, out, errw io.Writer, store *task.Store, dbPath string, b config.Backup) error {
+	res, err := backup.Run(ctx, store, backup.Options{
 		Dir:       b.Dir,
 		Recipient: b.Recipient,
 		Marker:    backup.MarkerPath(config.Dir(), dbPath, b.Dir),
@@ -105,30 +156,30 @@ func runBackup(cmd *cobra.Command, store *task.Store, dbPath string, b config.Ba
 		return fmt.Errorf("backup: %w", err)
 	}
 	if res.Skipped {
-		fmt.Fprintln(cmd.OutOrStdout(), "backup: no changes since the last backup")
+		fmt.Fprintln(out, "backup: no changes since the last backup")
 	} else {
-		fmt.Fprintf(cmd.OutOrStdout(), "backup: wrote %s\n", res.Path)
+		fmt.Fprintf(out, "backup: wrote %s\n", res.Path)
 	}
 	if !b.Git {
 		return nil
 	}
-	return pushBackup(cmd, b)
+	return pushBackup(ctx, out, errw, b)
 }
 
 // pushBackup commits and pushes the backup file in the data repo, and
-// says so on stdout when there was something to push. A push that fails
-// is a warning, not an error: the commit is safe locally, and every
-// later run, including a quit that changed nothing, pushes it.
-func pushBackup(cmd *cobra.Command, b config.Backup) error {
-	pushed, err := backup.Push(cmd.Context(), b.Dir, time.Now())
+// says so on out when there was something to push. A push that fails
+// is a warning on errw, not an error: the commit is safe locally, and
+// every later run, including a quit that changed nothing, pushes it.
+func pushBackup(ctx context.Context, out, errw io.Writer, b config.Backup) error {
+	pushed, err := backup.Push(ctx, b.Dir, time.Now())
 	switch {
 	case err == nil:
 		if pushed {
-			fmt.Fprintln(cmd.OutOrStdout(), "backup: pushed")
+			fmt.Fprintln(out, "backup: pushed")
 		}
 		return nil
 	case errors.Is(err, backup.ErrPushFailed):
-		fmt.Fprintf(cmd.ErrOrStderr(), "backup: committed locally but not pushed; will retry next time. %v\n", err)
+		fmt.Fprintf(errw, "backup: committed locally but not pushed; will retry next time. %v\n", err)
 		return nil
 	default:
 		return fmt.Errorf("backup git: %w", err)

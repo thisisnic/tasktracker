@@ -213,6 +213,11 @@ on_quit = true                                  # back up when the UI exits afte
 git = false                                     # true: git commit and push from dir too
 ```
 
+With `[backup]` configured, the serving process also backs up on its own:
+once when it starts and then every 12 hours of wall-clock time, writing
+nothing when the database has not changed since the last backup. A failed
+automatic backup is printed on stderr and tried again next time.
+
 Keep a copy of the private key in a password manager. Without it the backups
 cannot be opened. Then:
 

@@ -16,10 +16,12 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/thisisnic/tasktracker/internal/backup"
 	"github.com/thisisnic/tasktracker/internal/config"
 	"github.com/thisisnic/tasktracker/internal/task"
 	"github.com/thisisnic/tasktracker/internal/update"
@@ -1105,6 +1107,10 @@ func TestServe(t *testing.T) {
 	if errOut.String() != "" {
 		t.Errorf("stderr %q", errOut.String())
 	}
+	// Without [backup] there is no backup loop, and nothing said about one.
+	if strings.Contains(out.String(), "backup") {
+		t.Errorf("backup output without a backup configured:\n%s", out.String())
+	}
 }
 
 func TestServePortFromConfig(t *testing.T) {
@@ -1195,6 +1201,213 @@ func TestServeBadPort(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	if msg := r.run("", true, "--no-open", "--port", strconv.Itoa(port)); !strings.Contains(msg, fmt.Sprintf("port %d is already in use", port)) {
 		t.Errorf("taken port: %q", msg)
+	}
+}
+
+// syncBuffer is a bytes.Buffer a test can read while a serving command
+// still writes to it from another goroutine.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// waitUntil polls until cond holds or the test's patience runs out.
+func waitUntil(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// serveWithBackups starts the bare command with [backup] pointing at dir
+// and short backup intervals, and returns its combined output. The
+// server is stopped and waited for in a cleanup, so a failure part way
+// still shuts it down before the interval variables are restored
+// (cleanups run last-in first-out). Stopping must return nil, and a run
+// cut short by the shutdown is not a failure.
+func serveWithBackups(t *testing.T, r *runner, dir string) *syncBuffer {
+	t.Helper()
+	recipient := newKey(t, r, filepath.Join(t.TempDir(), "key.txt"))
+	cfgPath := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(cfgPath, []byte("[backup]\ndir = \""+dir+"\"\nrecipient = \""+recipient+"\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldEvery, oldPoll := autoBackupEvery, autoBackupPoll
+	autoBackupEvery, autoBackupPoll = 20*time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() { autoBackupEvery, autoBackupPoll = oldEvery, oldPoll })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	out := &syncBuffer{}
+	root := New(r.start)
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetArgs([]string{"--db", r.db, "--config", cfgPath, "--no-open", "--port", strconv.Itoa(freePort(t))})
+	done := make(chan error, 1)
+	go func() { done <- root.ExecuteContext(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("serve: %v\n%s", err, out.String())
+			}
+			if s := out.String(); strings.Contains(s, "context canceled") {
+				t.Errorf("shutdown reported as a backup failure:\n%s", s)
+			}
+		case <-time.After(10 * time.Second):
+			t.Error("serve did not stop")
+		}
+	})
+	return out
+}
+
+func TestServeBacksUpWhenChanged(t *testing.T) {
+	r := newRunner(t)
+	r.run("", false, "project", "add", "house")
+	dir := filepath.Join(t.TempDir(), "backups")
+	out := serveWithBackups(t, r, dir)
+
+	// The first backup is written as serving starts, without being asked.
+	file := filepath.Join(dir, backup.FileName)
+	waitUntil(t, "the first backup", func() bool { return strings.Contains(out.String(), "backup: wrote ") })
+	first, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Runs with nothing changed write nothing.
+	waitUntil(t, "a skipped run", func() bool { return strings.Contains(out.String(), "backup: no changes since the last backup") })
+	if cur, _ := os.ReadFile(file); !bytes.Equal(cur, first) {
+		t.Fatal("unchanged database was backed up again")
+	}
+	// A change made elsewhere is picked up by the next run.
+	r.run("", false, "project", "add", "garden")
+	waitUntil(t, "a backup of the change", func() bool { return strings.Count(out.String(), "backup: wrote ") >= 2 })
+	if cur, _ := os.ReadFile(file); bytes.Equal(cur, first) {
+		t.Fatal("second backup reported but the file is unchanged")
+	}
+}
+
+func TestServeRetriesAFailedBackup(t *testing.T) {
+	r := newRunner(t)
+	r.run("", false, "project", "add", "house")
+	// A regular file where the backup folder should be makes every run
+	// fail at creating the folder.
+	dir := filepath.Join(t.TempDir(), "backups")
+	if err := os.WriteFile(dir, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := serveWithBackups(t, r, dir)
+
+	// The failure is reported, serving goes on, and the next run fails
+	// the same way rather than giving up.
+	retrying := func(n int) func() bool {
+		return func() bool { return strings.Count(out.String(), "trying again in ") >= n }
+	}
+	waitUntil(t, "the first failure", retrying(1))
+	waitUntil(t, "a second attempt", retrying(2))
+	if s := out.String(); !strings.Contains(s, "backup: ") || strings.Contains(s, "backup: wrote ") {
+		t.Fatalf("expected backup errors and no backup, got\n%s", s)
+	}
+	// Once the folder can be made, the next run succeeds.
+	if err := os.Remove(dir); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "a backup after the fix", func() bool { return strings.Contains(out.String(), "backup: wrote ") })
+	if _, err := os.Stat(filepath.Join(dir, backup.FileName)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestAutoBackupFollowsTheWallClock runs the loop against a clock the
+// test moves, with the real 12-hour interval: a jump past the interval
+// between two polls, as a laptop waking from sleep makes, is a run, a
+// jump short of it is not, and a clock set backwards starts over. The
+// fake clock counts its calls, one per poll, so "no run" is asserted
+// only after polls that saw the moved clock.
+func TestAutoBackupFollowsTheWallClock(t *testing.T) {
+	r := newRunner(t)
+	recipient := newKey(t, r, filepath.Join(t.TempDir(), "key.txt"))
+	b := config.Backup{Dir: filepath.Join(t.TempDir(), "backups"), Recipient: recipient}
+	store, err := task.Open(r.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	var mu sync.Mutex
+	now := time.Date(2026, 1, 1, 9, 0, 0, 0, time.UTC)
+	polls := 0
+	oldNow, oldPoll := autoBackupNow, autoBackupPoll
+	autoBackupNow = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		polls++
+		return now
+	}
+	autoBackupPoll = 5 * time.Millisecond
+	t.Cleanup(func() { autoBackupNow, autoBackupPoll = oldNow, oldPoll })
+	// set moves the clock by d and returns the poll count at that moment,
+	// so a caller can wait for polls that happened after the move.
+	set := func(d time.Duration) int {
+		mu.Lock()
+		defer mu.Unlock()
+		now = now.Add(d)
+		return polls
+	}
+	polled := func(since int) func() bool {
+		return func() bool { mu.Lock(); defer mu.Unlock(); return polls >= since+3 }
+	}
+	out := &syncBuffer{}
+	runs := func() int { return strings.Count(out.String(), "backup: ") }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); autoBackup(ctx, out, out, store, r.db, b) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("autoBackup did not stop")
+		}
+	})
+
+	waitUntil(t, "the first run", func() bool { return runs() == 1 })
+	// Short of the interval, polls come and go without a run.
+	waitUntil(t, "polls after a small step", polled(set(autoBackupEvery-time.Minute)))
+	if n := runs(); n != 1 {
+		t.Fatalf("%d runs after %s, want 1", n, autoBackupEvery-time.Minute)
+	}
+	// One more minute and the interval has passed: the clock jumped
+	// while the ticker slept only milliseconds.
+	set(time.Minute)
+	waitUntil(t, "a run after the interval", func() bool { return runs() == 2 })
+	// Set back an hour, the schedule starts over at once rather than
+	// waiting 13 hours for the clock to catch up.
+	set(-time.Hour)
+	waitUntil(t, "a run after the clock went back", func() bool { return runs() == 3 })
+	// And from there the interval counts again from the new time.
+	waitUntil(t, "polls after the restart", polled(set(autoBackupEvery-time.Minute)))
+	if n := runs(); n != 3 {
+		t.Fatalf("%d runs after the restart, want 3", n)
+	}
+	if s := out.String(); strings.Contains(s, "trying again") {
+		t.Fatalf("a run failed:\n%s", s)
 	}
 }
 

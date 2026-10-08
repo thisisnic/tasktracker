@@ -62,9 +62,9 @@ func afterQuit(cmd *cobra.Command, store *task.Store, dbPath string, cfg config.
 	if !changed {
 		fmt.Fprintln(cmd.OutOrStdout(), "backup: nothing changed this session")
 		if cfg.Backup.Git && hasBackup(cfg.Backup.Dir) {
-			return pushBackup(cmd, cfg.Backup)
+			return pushBackup(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg.Backup)
 		}
 		return nil
 	}
-	return runBackup(cmd, store, dbPath, cfg.Backup)
+	return runBackup(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), store, dbPath, cfg.Backup)
 }

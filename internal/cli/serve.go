@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -63,5 +64,21 @@ func runServe(cmd *cobra.Command, dbPath, cfgPath string, port int, noOpen bool)
 			fmt.Fprintf(cmd.ErrOrStderr(), "could not open a browser (%v); open %s yourself\n", err, url)
 		}
 	}
-	return server.Serve(ctx, ln, srv)
+	// The backup loop shares the server's lifetime and must be done
+	// before the deferred store close, so it is waited for here. A
+	// broken config names no backup folder, and the note above already
+	// says it is being ignored, so only a readable, configured one
+	// starts the loop.
+	var bg sync.WaitGroup
+	if cfgErr == nil && cfg.Backup.Configured() {
+		bg.Add(1)
+		go func() {
+			defer bg.Done()
+			autoBackup(ctx, cmd.OutOrStdout(), cmd.ErrOrStderr(), store, dbPath, cfg.Backup)
+		}()
+	}
+	err = server.Serve(ctx, ln, srv)
+	stop()
+	bg.Wait()
+	return err
 }

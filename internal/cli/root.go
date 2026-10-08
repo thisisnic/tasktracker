@@ -74,6 +74,8 @@ config if it is not in the usual place.
 Backups are encrypted snapshots written to a folder you choose. Run
 tasktracker key new once to set that up; with on_quit set in the config the
 TUI writes one when it exits, unless nothing changed while it was open.
+While serving, the database is backed up when it has changed: once at
+start and then every 12 hours, if [backup] is configured.
 
 Once a day tasktracker asks GitHub for the latest release. While a newer one
 is out, every command says so on stderr and the TUI says so in its title
