@@ -420,17 +420,23 @@ func TestTasks(t *testing.T) {
 		t.Errorf("edited = %+v", tk)
 	}
 	// Stepping the status: status alone.
-	want(t, srv, 200, "PATCH", "/api/tasks/3", map[string]any{"status": "doing"}, &tk)
-	if tk.Status != task.Doing || tk.Title != "fix the back gate" {
+	want(t, srv, 200, "PATCH", "/api/tasks/3", map[string]any{"status": "done"}, &tk)
+	if tk.Status != task.Finished || tk.Title != "fix the back gate" {
 		t.Errorf("stepped = %+v", tk)
 	}
-	if code, b := do(t, srv, "PATCH", "/api/tasks/3", map[string]any{"status": "paused"}); code != 400 || !strings.Contains(string(b), "want todo, doing, done or dropped") {
-		t.Errorf("bad status alone: %d %s", code, b)
+	want(t, srv, 200, "PATCH", "/api/tasks/3", map[string]any{"status": "todo"}, &tk)
+	if tk.Status != task.Todo {
+		t.Errorf("stepped back = %+v", tk)
 	}
-	if code, b := do(t, srv, "PATCH", "/api/tasks/3", map[string]any{"status": "paused", "title": "x"}); code != 400 || !strings.Contains(string(b), "want todo, doing, done or dropped") {
+	for _, bad := range []string{"paused", "doing"} {
+		if code, b := do(t, srv, "PATCH", "/api/tasks/3", map[string]any{"status": bad}); code != 400 || !strings.Contains(string(b), "want todo, done or dropped") {
+			t.Errorf("bad status %q alone: %d %s", bad, code, b)
+		}
+	}
+	if code, b := do(t, srv, "PATCH", "/api/tasks/3", map[string]any{"status": "paused", "title": "x"}); code != 400 || !strings.Contains(string(b), "want todo, done or dropped") {
 		t.Errorf("bad status with title: %d %s", code, b)
 	}
-	if code, _ := do(t, srv, "PATCH", "/api/tasks/99", map[string]any{"status": "doing"}); code != 404 {
+	if code, _ := do(t, srv, "PATCH", "/api/tasks/99", map[string]any{"status": "done"}); code != 404 {
 		t.Errorf("missing task, status alone: %d", code)
 	}
 	if code, _ := do(t, srv, "PATCH", "/api/tasks/99", map[string]any{"title": "x"}); code != 404 {
@@ -445,7 +451,7 @@ func TestTasks(t *testing.T) {
 
 	// Archiving: refused while open, done when finished, undone by
 	// reopening.
-	if code, b := do(t, srv, "PUT", "/api/tasks/3/archived", map[string]any{"archived": true}); code != 400 || !strings.Contains(string(b), "still doing") {
+	if code, b := do(t, srv, "PUT", "/api/tasks/3/archived", map[string]any{"archived": true}); code != 400 || !strings.Contains(string(b), "still todo") {
 		t.Errorf("archiving an open task: %d %s", code, b)
 	}
 	want(t, srv, 200, "PATCH", "/api/tasks/3", map[string]any{"status": "done"}, &tk)
@@ -482,7 +488,7 @@ func TestCopyTask(t *testing.T) {
 	if len(n.Subtasks) != 1 || n.Subtasks[0].Title != "buy paint" || n.Subtasks[0].Done || n.Subtasks[0].TaskID != 3 {
 		t.Errorf("copied subtasks = %+v", n.Subtasks)
 	}
-	if code, b := do(t, srv, "POST", "/api/tasks/1/copy", map[string]any{"status": "doing"}); code != 400 || !strings.Contains(string(b), "always starts as todo") {
+	if code, b := do(t, srv, "POST", "/api/tasks/1/copy", map[string]any{"status": "done"}); code != 400 || !strings.Contains(string(b), "always starts as todo") {
 		t.Errorf("copy with status: %d %s", code, b)
 	}
 	if code, _ := do(t, srv, "POST", "/api/tasks/99/copy", map[string]any{}); code != 404 {

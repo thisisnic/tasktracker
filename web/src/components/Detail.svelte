@@ -22,7 +22,7 @@
     });
   }
 
-  const statusTone = { todo: "neutral", doing: "warning", done: "success", dropped: "muted" } as const;
+  const statusTone = { todo: "neutral", done: "success", dropped: "muted" } as const;
 
   const name = $derived.by(() => {
     if (!row) return "";

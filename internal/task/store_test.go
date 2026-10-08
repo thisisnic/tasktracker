@@ -160,12 +160,12 @@ func TestTaskLifecycle(t *testing.T) {
 		t.Errorf("missing project = %v", err)
 	}
 
-	title, due, doing := "paint the hallway", "", Doing
-	task, err = s.UpdateTask(ctx, task.ID, TaskEdit{Title: &title, Due: &due, Status: &doing, ProjectID: &other.ID})
+	title, due, finished := "paint the hallway", "", Finished
+	task, err = s.UpdateTask(ctx, task.ID, TaskEdit{Title: &title, Due: &due, Status: &finished, ProjectID: &other.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.Title != "paint the hallway" || task.Due != "" || task.Status != Doing || task.ProjectID != other.ID || task.Notes != "  two coats\nwhite" {
+	if task.Title != "paint the hallway" || task.Due != "" || task.Status != Finished || task.ProjectID != other.ID || task.Notes != "  two coats\nwhite" {
 		t.Errorf("updated task = %+v", task)
 	}
 	notes := "one coat\n"
@@ -185,13 +185,15 @@ func TestTaskLifecycle(t *testing.T) {
 		t.Errorf("move to missing project = %v", err)
 	}
 
-	if err := s.MarkTask(ctx, task.ID, Doing); err != nil {
+	if err := s.MarkTask(ctx, task.ID, Dropped); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkTask(ctx, task.ID, Status("blocked")); err == nil {
-		t.Error("bad status accepted")
+	for _, bad := range []Status{"blocked", "doing"} {
+		if err := s.MarkTask(ctx, task.ID, bad); err == nil {
+			t.Errorf("status %q accepted", bad)
+		}
 	}
-	if got, _ := s.GetTask(ctx, task.ID); got.Status != Doing {
+	if got, _ := s.GetTask(ctx, task.ID); got.Status != Dropped {
 		t.Errorf("status = %s", got.Status)
 	}
 	if err := s.DeleteTask(ctx, task.ID); err != nil {
@@ -251,10 +253,10 @@ func TestCopyTask(t *testing.T) {
 	buy := addSubtask(t, s, orig.ID, "buy paint")
 	addSubtask(t, s, orig.ID, "move furniture")
 	check(t, s.TickSubtask(ctx, buy.ID, true))
-	check(t, s.MarkTask(ctx, orig.ID, Doing))
+	check(t, s.MarkTask(ctx, orig.ID, Finished))
 
-	// A plain copy: same title, due, notes and project, todo, subtasks
-	// unticked.
+	// A plain copy: same title, due, notes and project, todo whatever the
+	// original's status, subtasks unticked.
 	got, err := s.CopyTask(ctx, orig.ID, TaskEdit{})
 	if err != nil {
 		t.Fatal(err)
@@ -265,7 +267,7 @@ func TestCopyTask(t *testing.T) {
 	if len(got.Subtasks) != 2 || got.Subtasks[0].Title != "buy paint" || got.Subtasks[0].Done || got.Subtasks[1].Title != "move furniture" || got.Subtasks[0].TaskID != got.Task.ID {
 		t.Errorf("copied subtasks = %+v", got.Subtasks)
 	}
-	if o, _ := s.GetTask(ctx, orig.ID); o.Status != Doing {
+	if o, _ := s.GetTask(ctx, orig.ID); o.Status != Finished {
 		t.Errorf("original changed: %+v", o)
 	}
 	if subs, _ := s.ListSubtasks(ctx, orig.ID); len(subs) != 2 || !subs[0].Done {
@@ -393,9 +395,9 @@ func TestArchive(t *testing.T) {
 	if got, _ := s.GetTask(ctx, tk.ID); !got.Archived {
 		t.Error("marking done unarchived the task")
 	}
-	doing := Doing
-	if got, err := s.UpdateTask(ctx, tk.ID, TaskEdit{Status: &doing}); err != nil || got.Archived {
-		t.Errorf("editing to doing: %+v, %v", got, err)
+	todo := Todo
+	if got, err := s.UpdateTask(ctx, tk.ID, TaskEdit{Status: &todo}); err != nil || got.Archived {
+		t.Errorf("editing to todo: %+v, %v", got, err)
 	}
 	title := "paint again"
 	check(t, s.MarkTask(ctx, tk.ID, Finished))
@@ -406,6 +408,44 @@ func TestArchive(t *testing.T) {
 	check(t, s.ArchiveTask(ctx, tk.ID, false))
 	if got, _ := s.GetTask(ctx, tk.ID); got.Archived {
 		t.Error("unarchive did not take")
+	}
+}
+
+// TestMigrateRetiresDoing opens a database made while doing was a
+// status and checks its doing tasks come back as todo, still open and
+// still theirs, with the other statuses untouched.
+func TestMigrateRetiresDoing(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "old.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := strings.Replace(schema, "CHECK (status IN ('todo','done','dropped'))", "CHECK (status IN ('todo','doing','done','dropped'))", 1)
+	if old == schema {
+		t.Fatal("schema no longer has the status check this test widens")
+	}
+	if _, err := db.Exec(old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO projects (id, name, created_at) VALUES (1, 'p', '');
+		INSERT INTO tasks (id, project_id, title, status, created_at) VALUES (1, 1, 'started', 'doing', ''), (2, 1, 'done one', 'done', ''), (3, 1, 'dropped one', 'dropped', '')`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	for id, want := range map[int64]Status{1: Todo, 2: Finished, 3: Dropped} {
+		if got, err := s.GetTask(ctx, id); err != nil || got.Status != want {
+			t.Errorf("task %d after migration: %+v, %v, want %s", id, got, err, want)
+		}
+	}
+	open, err := s.ListTasks(ctx, TaskFilter{Open: true})
+	if err != nil || len(open) != 1 || open[0].ID != 1 {
+		t.Errorf("open tasks after migration = %+v, %v", open, err)
 	}
 }
 

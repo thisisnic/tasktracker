@@ -3,7 +3,7 @@
 // prints them; empty lists are [] and empty fields are left out.
 
 export type State = "active" | "done" | "shelved";
-export type Status = "todo" | "doing" | "done" | "dropped";
+export type Status = "todo" | "done" | "dropped";
 
 export interface Area {
   id: number;
@@ -174,20 +174,13 @@ export const api = {
 
 /** Whether the task is still to be done. */
 export function isOpen(t: Task): boolean {
-  return t.status === "todo" || t.status === "doing";
+  return t.status === "todo";
 }
 
-/** The status after s when stepping through a task's life: todo, doing,
- * done, then back to todo. Dropped steps back to todo. */
+/** The status after s when stepping a task: todo to done and back.
+ * Dropped steps back to todo. */
 export function nextStatus(s: Status): Status {
-  switch (s) {
-    case "todo":
-      return "doing";
-    case "doing":
-      return "done";
-    default:
-      return "todo";
-  }
+  return s === "todo" ? "done" : "todo";
 }
 
 /** The state after s when stepping a project: active, done, shelved,

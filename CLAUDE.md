@@ -10,7 +10,8 @@ holds the design decisions and open questions.
 
 - `cmd/tasktracker` — main, wires config, store and the CLI.
 - `internal/task` — the SQLite store and the outline tree. All writes go
-  through `Store` methods; `migrate()` only adds columns.
+  through `Store` methods; `migrate()` only adds columns, with one
+  recorded exception: it rewrites the retired `doing` status to `todo`.
 - `internal/cli` — Cobra commands, every one with `--json`.
 - `internal/tui` — Bubble Tea v2 model, huh forms, row list, cursor rules.
 - `internal/server` — the JSON API and the browser UI on a loopback port.
@@ -122,6 +123,8 @@ committing rather than after.
 - **Messages that accumulate.** Anything appended to the status line by
   a timer or a repeat must be added once, and must not wipe the last
   action's message or error. Timers clear only their own errors.
-- **Migrations only add columns.** `migrate()` never rewrites data; a
+- **Migrations only add columns.** `migrate()` does not rewrite data; a
   new column gets a default that leaves existing rows meaning what they
-  meant before.
+  meant before. The one exception is retiring the `doing` status, where
+  no column could keep a doing task meaning what it meant; it is the
+  exception, not a precedent.

@@ -38,7 +38,6 @@ type Status string
 
 const (
 	Todo     Status = "todo"
-	Doing    Status = "doing"
 	Finished Status = "done"
 	Dropped  Status = "dropped"
 )
@@ -107,14 +106,14 @@ type Task struct {
 	Issue     string `json:"issue,omitempty"` // a GitHub issue or pull request URL, or empty for none
 	Notes     string `json:"notes,omitempty"` // free text; blank lines at either end are dropped
 	// Archived is set on a finished task that has been put away. An open
-	// task is never archived: marking an archived task todo or doing
-	// brings it back.
+	// task is never archived: marking an archived task todo brings it
+	// back.
 	Archived  bool      `json:"archived,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
 // Open reports whether the task is still to be done.
-func (t Task) Open() bool { return t.Status == Todo || t.Status == Doing }
+func (t Task) Open() bool { return t.Status == Todo }
 
 // DueDate parses the task's due date. ok is false when there is none.
 func (t Task) DueDate() (d time.Time, ok bool) {
@@ -272,28 +271,23 @@ func ParseState(s string) (State, error) {
 	return "", invalid("state %q: want active, done or shelved", s)
 }
 
-// ParseStatus accepts todo, doing, done or dropped.
+// ParseStatus accepts todo, done or dropped.
 func ParseStatus(s string) (Status, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "todo", "to-do":
 		return Todo, nil
-	case "doing", "in-progress":
-		return Doing, nil
 	case "done", "finished":
 		return Finished, nil
 	case "dropped", "drop":
 		return Dropped, nil
 	}
-	return "", invalid("status %q: want todo, doing, done or dropped", s)
+	return "", invalid("status %q: want todo, done or dropped", s)
 }
 
-// Next is the status after s when stepping through a task's life: todo,
-// doing, done, then back to todo. Dropped steps back to todo.
+// Next is the status after s when stepping a task: todo to done and
+// back. Dropped steps back to todo.
 func (s Status) Next() Status {
-	switch s {
-	case Todo:
-		return Doing
-	case Doing:
+	if s == Todo {
 		return Finished
 	}
 	return Todo
@@ -329,7 +323,7 @@ type TaskNode struct {
 	Subtasks []Subtask `json:"subtasks"`
 }
 
-// OpenTasks counts the project's tasks that are still todo or doing.
+// OpenTasks counts the project's tasks that are still todo.
 func (p ProjectNode) OpenTasks() int {
 	n := 0
 	for _, t := range p.Tasks {

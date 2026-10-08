@@ -32,8 +32,8 @@ n area · A project · a task · s subtask · c copy task · e edit · space nex
 
 1. Make a project. Give it a description and, if you like, the ids of the
    goaltracker goals it serves.
-2. Add tasks to it. A task has a title, a status (`todo`, `doing`, `done`
-   or `dropped`), an optional due date, an optional link to a GitHub
+2. Add tasks to it. A task has a title, a status (`todo`, `done` or
+   `dropped`), an optional due date, an optional link to a GitHub
    issue, and notes: a block of free text for whatever is worth keeping
    next to it.
 3. Break a task into subtasks when it helps: a checklist of titles with a
@@ -64,8 +64,9 @@ The browser UI and the terminal UI work on the same database at the same
 time, and so does the CLI; each sees what the others change within a
 couple of seconds.
 
-In the browser: one list of areas, projects, tasks and subtasks, with
-checkboxes for subtasks and a chevron to fold an area or project. A click
+In the browser: one list of areas, projects, tasks and subtasks, with a
+checkbox on each task and subtask and a chevron to fold an area or
+project. Ticking a task finishes it; unticking reopens it. A click
 on a row, or `enter`, opens its detail and actions in a drawer, and the
 terminal UI's other keys work too; `space` steps a row on as it does
 there. Set `http://127.0.0.1:7344/` as
@@ -94,7 +95,7 @@ tasktracker project add "grant report" --in 2
 tasktracker task add "paint the hall" --project 1 --due 2026-10-01
 tasktracker subtask add 1 "buy paint"
 tasktracker subtask tick 1
-tasktracker task mark 1 doing
+tasktracker task mark 1 done
 tasktracker task list --due --json
 ```
 
@@ -296,7 +297,7 @@ wrong.
 | `tasktracker task show ID` | One task with its subtasks; `--json` |
 | `tasktracker task edit ID` | Change title, due date, issue, notes or project; `--no-due`, `--no-issue`, `--no-notes` |
 | `tasktracker task copy ID` | New task from an existing one, notes and subtasks included; `--title`, `--due`, `--no-due`, `--issue`, `--notes`, `--no-notes`, `--project`, `--json` |
-| `tasktracker task mark ID todo\|doing\|done\|dropped` | Set a task's status |
+| `tasktracker task mark ID todo\|done\|dropped` | Set a task's status |
 | `tasktracker task archive ID` / `unarchive ID` | Put a finished task out of the tree, or bring it back |
 | `tasktracker task delete ID` | Delete a task and its subtasks; `--yes` |
 | `tasktracker subtask add TASK_ID TITLE` | Add a checklist item; `--json` |

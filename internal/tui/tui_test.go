@@ -305,16 +305,18 @@ func TestSpaceAdvances(t *testing.T) {
 	m, store := setup(t, nil)
 	ctx := context.Background()
 	press(m, "j", "space")
-	if tk, _ := store.GetTask(ctx, 1); tk.Status != task.Doing {
+	if tk, _ := store.GetTask(ctx, 1); tk.Status != task.Finished {
 		t.Errorf("space on todo: %s", tk.Status)
 	}
 	if r, _ := m.selected(); r.target() != (target{rowTask, 1}) {
 		t.Errorf("selection moved: %v", r.target())
 	}
+	// Space again reopens it, and a third press finishes it once more.
 	press(m, "space")
-	if tk, _ := store.GetTask(ctx, 1); tk.Status != task.Finished {
-		t.Errorf("space on doing: %s", tk.Status)
+	if tk, _ := store.GetTask(ctx, 1); tk.Status != task.Todo || m.status != "task #1 todo" {
+		t.Errorf("space on done: %s, status %q", tk.Status, m.status)
 	}
+	press(m, "space")
 	// A done task stays in the tree until it is archived; the status line
 	// says how.
 	if got := labels(m); got[1] != "T:paint the hall" || !strings.Contains(m.status, "z archives it") {
@@ -410,7 +412,7 @@ func TestArchive(t *testing.T) {
 	if !strings.Contains(m.status, "z on the task") {
 		t.Errorf("z on subtask: %q", m.status)
 	}
-	press(m, "k", "space", "space", "z") // todo -> doing -> done, then archive
+	press(m, "k", "space", "z") // todo -> done, then archive
 	if tk, _ := store.GetTask(ctx, 1); !tk.Archived {
 		t.Fatal("z did not archive the done task")
 	}
@@ -449,7 +451,7 @@ func TestArchive(t *testing.T) {
 	if tk, _ := store.GetTask(ctx, 1); tk.Archived || tk.Status != task.Todo || !strings.Contains(m.status, "back from the archive") {
 		t.Errorf("x on an archived dropped task: %+v status=%q", tk, m.status)
 	}
-	press(m, "space", "space", "z", "g", "j", "space") // done, archive (still shown), done -> todo
+	press(m, "space", "z", "g", "j", "space") // done, archive (still shown), done -> todo
 	if tk, _ := store.GetTask(ctx, 1); tk.Archived || tk.Status != task.Todo || !strings.Contains(m.status, "back from the archive") {
 		t.Errorf("space on an archived task: %+v status=%q", tk, m.status)
 	}
@@ -527,7 +529,7 @@ func TestDeadlineView(t *testing.T) {
 	press(m, "r", "g")
 	// A finished task is not due any more: it leaves this list, and the
 	// status says where it went.
-	press(m, "j", "space", "space")
+	press(m, "j", "space")
 	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Next 7 days", "T:fix the gate", "H:No deadline", "T:email accountant"}) || !strings.Contains(m.status, "by project shows it until archived") {
 		t.Errorf("after finishing: rows=%v status=%q", got, m.status)
 	}
@@ -788,7 +790,7 @@ func TestLandByDeadlineFolded(t *testing.T) {
 	if r, _ := m.selected(); r.target() != (target{rowTask, 1}) {
 		t.Fatalf("cursor before finishing: %d %v %v", m.cursor, r.target(), labels(m))
 	}
-	press(m, "space", "space")
+	press(m, "space")
 	if r, _ := m.selected(); r.target() != (target{rowTask, 2}) || labels(m)[m.cursor-1] != "H:Next 7 days" {
 		t.Errorf("cursor after finishing before a heading: %d %v %v", m.cursor, r.target(), labels(m))
 	}
@@ -1184,13 +1186,13 @@ func TestEditTaskViaForm(t *testing.T) {
 	}
 	typeText(m, ", white")
 	press(m, "enter")      // notes -> status
-	press(m, "j", "enter") // todo -> doing, -> project
+	press(m, "j", "enter") // todo -> done, -> project
 	press(m, "j", "enter") // house -> work, submit
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("form: mode=%v err=%v", m.mode, m.err)
 	}
 	tk, _ := store.GetTask(context.Background(), 1)
-	if tk.Title != "paint the hall today" || tk.Due != "" || tk.Issue != "https://github.com/owner/repo/pull/7" || tk.Notes != "two coats, white" || tk.Status != task.Doing || tk.ProjectID != 2 {
+	if tk.Title != "paint the hall today" || tk.Due != "" || tk.Issue != "https://github.com/owner/repo/pull/7" || tk.Notes != "two coats, white" || tk.Status != task.Finished || tk.ProjectID != 2 {
 		t.Errorf("edited task: %+v", tk)
 	}
 	// The notes come after the subtasks in the detail pane.
@@ -1258,7 +1260,7 @@ func TestChangedTracksWrites(t *testing.T) {
 		}
 	}
 	changed := [][]string{
-		{"j", "space"},      // task todo -> doing
+		{"j", "space"},      // task todo -> done
 		{"j", "j", "space"}, // subtask ticked
 		{"j", "x"},          // task dropped
 		{"j", "x", "z"},     // then archived
@@ -1308,7 +1310,7 @@ func TestPollSeesChangesElsewhere(t *testing.T) {
 	press(m, "space")
 	m.changed = false
 	deliver(m, pollMsg{})
-	if m.status != "task #1 doing" || m.changed {
+	if m.status != "task #1 done; z archives it" || m.changed {
 		t.Errorf("poll after an own write: status=%q changed=%v", m.status, m.changed)
 	}
 	// A task added by another process shows up, with the cursor still on
@@ -1318,7 +1320,7 @@ func TestPollSeesChangesElsewhere(t *testing.T) {
 	}
 	m.changed = false
 	deliver(m, pollMsg{})
-	if m.status != "task #1 doing; changed elsewhere, reloaded" || !m.changed || m.err != nil {
+	if m.status != "task #1 done; z archives it; changed elsewhere, reloaded" || !m.changed || m.err != nil {
 		t.Errorf("poll after a change elsewhere: status=%q changed=%v err=%v", m.status, m.changed, m.err)
 	}
 	if got := labels(m); !reflect.DeepEqual(got, []string{"P:house", "T:paint the hall", "S:buy paint", "S:move furniture", "T:fix the gate", "T:clear the gutters", "P:work", "T:email accountant"}) {
@@ -2084,7 +2086,7 @@ func TestCollapse(t *testing.T) {
 	}
 
 	// The fold survives a reload and an edit elsewhere.
-	press(m, "G", "space") // email accountant -> doing
+	press(m, "G", "space") // email accountant -> done
 	if got := labels(m); !reflect.DeepEqual(got, want) {
 		t.Errorf("rows after an edit = %v", got)
 	}

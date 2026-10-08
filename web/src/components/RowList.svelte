@@ -7,9 +7,10 @@
   import { bucketName, overdue, rowTarget, type Row } from "../lib/rows";
 
   // The list: areas and projects as headings that fold, tasks under
-  // them with a status mark and what is due, subtasks as checkboxes.
-  // A click selects a row and opens its detail; the checkbox and the
-  // fold chevron act without opening it.
+  // them with what is due, subtasks under those; a task and a subtask
+  // are each a checkbox, ticked when done. A click selects a row and
+  // opens its detail; the checkbox and the fold chevron act without
+  // opening it.
   let { app, onopen }: { app: AppState; onopen: () => void } = $props();
 
   let listEl = $state<HTMLElement>();
@@ -55,15 +56,17 @@
     app.toggleFold();
   }
 
-  // The box shows the subtask as the data has it, never a click that
-  // was dropped or refused: the click is stopped from flipping it, and
-  // the write's reload flips it when the tick lands. The box never
+  // The box shows the row as the data has it, never a click that was
+  // dropped or refused: the click is stopped from flipping it, and the
+  // write's reload flips it when the write lands. A task's box ticks
+  // it done and unticks it back to todo; a dropped task's is clear,
+  // since dropped is not done, and a click ticks it done. The box never
   // takes focus, so the keys keep working after a click on it.
   function onTick(e: MouseEvent, i: number) {
     e.preventDefault();
     e.stopPropagation();
     app.select(i);
-    void app.advance();
+    void app.tick();
   }
 
   // A click in the list puts focus on the list itself, not on the row
@@ -123,16 +126,12 @@
               {#if app.isFolded(rowTarget(r))}<ChevronRight size={16} />{:else}<ChevronDown size={16} />{/if}
             </IconButton>
           </span>
-        {:else if r.kind === "task"}
-          <span class="lead">
-            <span class="dot {r.task!.task.status}" role="img" aria-label={r.task!.task.status} title={r.task!.task.status}></span>
-          </span>
         {:else}
           <span class="lead">
             <input
               type="checkbox"
               class="tick"
-              checked={r.subtask!.done}
+              checked={r.kind === "task" ? r.task!.task.status === "done" : r.subtask!.done}
               aria-label="Done"
               tabindex="-1"
               onmousedown={takeFocus}
@@ -169,6 +168,7 @@
             {@const t = r.task!}
             {#if t.task.notes}<span class="icon" title="has notes"><FileText size={14} /></span>{/if}
             {#if t.subtasks.length > 0}<span class="count">{ticked(t)}/{t.subtasks.length}</span>{/if}
+            {#if t.task.status === "dropped"}<Chip size="sm" tone="muted">dropped</Chip>{/if}
             {#if t.task.archived}<Chip size="sm" tone="muted">archived</Chip>{/if}
             {#if t.task.due}
               <Chip size="sm" tone={overdue(t.task, app.today) ? "danger" : isOpen(t.task) ? "neutral" : "muted"}>{t.task.due}</Chip>
@@ -297,27 +297,4 @@
     cursor: pointer;
   }
 
-  .dot {
-    display: inline-block;
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    border: 2px solid var(--text-muted);
-    box-sizing: border-box;
-  }
-
-  .dot.doing {
-    border-color: var(--accent-amber);
-    background: color-mix(in srgb, var(--accent-amber) 50%, transparent);
-  }
-
-  .dot.done {
-    border-color: var(--accent-green);
-    background: var(--accent-green);
-  }
-
-  .dot.dropped {
-    border-color: var(--border-default);
-    background: var(--border-default);
-  }
 </style>

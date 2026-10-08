@@ -87,7 +87,6 @@
       Status
       <select bind:value={status}>
         <option value="todo">todo</option>
-        <option value="doing">doing</option>
         <option value="done">done</option>
         <option value="dropped">dropped</option>
       </select>

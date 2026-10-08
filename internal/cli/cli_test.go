@@ -249,15 +249,16 @@ func TestTaskLifecycle(t *testing.T) {
 		t.Errorf("show prints a notes heading with none:\n%s", out)
 	}
 
-	r.run("", false, "task", "mark", "1", "doing")
 	r.run("", false, "task", "mark", "2", "done")
-	if msg := r.run("", true, "task", "mark", "2", "blocked"); !strings.Contains(msg, "want todo, doing, done or dropped") {
-		t.Errorf("bad status: %q", msg)
+	for _, bad := range []string{"blocked", "doing"} {
+		if msg := r.run("", true, "task", "mark", "2", bad); !strings.Contains(msg, "want todo, done or dropped") {
+			t.Errorf("status %q: %q", bad, msg)
+		}
 	}
 	// A done task stays listed until it is archived.
 	out = r.run("", false, "task", "list")
-	if !strings.Contains(out, "email accountant") || !strings.Contains(out, "doing") || !strings.Contains(out, "done") {
-		t.Errorf("list hides the doing or done task:\n%s", out)
+	if !strings.Contains(out, "email accountant") || !strings.Contains(out, "todo") || !strings.Contains(out, "done") {
+		t.Errorf("list hides the todo or done task:\n%s", out)
 	}
 	if out := r.run("", false, "task", "list", "--open"); strings.Contains(out, "email accountant") || !strings.Contains(out, "hallway") || !strings.Contains(out, "P2") {
 		t.Errorf("--open keeps the tree without the done task:\n%s", out)
@@ -265,7 +266,7 @@ func TestTaskLifecycle(t *testing.T) {
 	if msg := r.run("", true, "task", "list", "--open", "--status", "done"); !strings.Contains(msg, "open") || !strings.Contains(msg, "status") {
 		t.Errorf("--open with --status: %q", msg)
 	}
-	if msg := r.run("", true, "task", "archive", "1"); !strings.Contains(msg, "task 1: task is still doing") {
+	if msg := r.run("", true, "task", "archive", "1"); !strings.Contains(msg, "task 1: task is still todo") {
 		t.Errorf("archiving an open task: %q", msg)
 	}
 	if out := r.run("", false, "task", "archive", "2"); !strings.Contains(out, "task 2 archived") {

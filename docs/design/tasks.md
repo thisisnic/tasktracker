@@ -86,8 +86,14 @@ and the other UI's folds from that session are lost.
 
 - A task has a title, a status, an optional due date, an optional link
   to a GitHub issue and a block of notes, and nothing else for now.
-- Statuses: `todo`, `doing`, `done`, with `dropped` for things decided
-  against.
+- Statuses: `todo` and `done`, with `dropped` for things decided
+  against. There was a `doing` between them at first, and it was never
+  set on purpose: the list is of things to do, and the moment of
+  starting one is not worth a keypress. A task is done or it is not,
+  which is what a checkbox says, and the page's rows are checkboxes.
+  Retiring it is the one migration that rewrites rows, since no added
+  column could leave a doing task meaning what it meant: a doing task
+  was an open one, so it becomes `todo`.
 - No priority, estimate or comments. Those are the issue-tracker parts
   left out until they are missed. Notes were the first to be missed.
 
@@ -153,8 +159,8 @@ archived on purpose.
   hiding it would lose it.
 - An archived task is out of the tree and the due list by default, and
   shown again with the same toggle that shows finished projects.
-- Reopening an archived task, by marking it todo or doing, brings it back
-  out of the archive. There is no such thing as an archived open task.
+- Reopening an archived task, by marking it todo, brings it back out of
+  the archive. There is no such thing as an archived open task.
 - Projects keep their own rule: a done or shelved project is hidden with
   everything in it, after a confirmation.
 
@@ -354,10 +360,13 @@ which went this way first, so the two feel the same.
   says the same words, and the rules for where the selection lands
   after a change are ported line for line, so the two UIs agree and
   there is one set of rules to reason about. How it looks follows web
-  practice instead: one list in the page's own typeface, checkboxes
-  for subtasks, a chevron to fold, a chip for a due date, and a drawer
-  that opens on a click, or on enter, with the detail and the actions
-  as buttons. Enter opens, as it does in any list on the web, where the
+  practice instead: one list in the page's own typeface, a checkbox on
+  every task and subtask, a chevron to fold, a chip for a due date, and
+  a drawer that opens on a click, or on enter, with the detail and the
+  actions as buttons. A task's box is ticked when it is done and clear
+  otherwise, so a dropped task's box is clear and a click on it ticks
+  the task done, where space on that row reopens it: a tick says done,
+  and the box does what a tick says. Enter opens, as it does in any list on the web, where the
   terminal UI has it step the row on like space; space still does. A
   first version copied the terminal UI's two panes, monospace and
   glyphs, and read as a terminal in a browser, which was not the point

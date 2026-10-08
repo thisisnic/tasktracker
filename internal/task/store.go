@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 	id         INTEGER PRIMARY KEY,
 	project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
 	title      TEXT NOT NULL,
-	status     TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo','doing','done','dropped')),
+	status     TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo','done','dropped')),
 	due        TEXT NOT NULL DEFAULT '',
 	issue      TEXT NOT NULL DEFAULT '',
 	notes      TEXT NOT NULL DEFAULT '',
@@ -129,7 +129,8 @@ func Open(path string, opts ...Option) (*Store, error) {
 
 // migrate adds what tables made by earlier versions lack. CREATE TABLE IF
 // NOT EXISTS leaves an existing table as it was, so a column added to the
-// schema later has to be added to old databases here.
+// schema later has to be added to old databases here. It also retires
+// the doing status, the one rewrite of rows; see the note at the end.
 func migrate(db *sql.DB) error {
 	has, err := hasColumn(db, "projects", "area_id")
 	if err != nil {
@@ -171,6 +172,15 @@ func migrate(db *sql.DB) error {
 		if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN notes TEXT NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
+	}
+	// The doing status was retired: a task is open or finished, and a
+	// doing task was an open one. This is the one migration that rewrites
+	// rows, because there is no column to add that would leave a doing
+	// task meaning what it meant. Rewritten in place rather than rebuilt:
+	// an old database's CHECK still names doing, which is harmless, since
+	// the store is what checks a status now.
+	if _, err := db.Exec(`UPDATE tasks SET status = 'todo' WHERE status = 'doing'`); err != nil {
+		return err
 	}
 	return nil
 }
@@ -523,10 +533,10 @@ func checkState(st State) error {
 
 func checkStatus(st Status) error {
 	switch st {
-	case Todo, Doing, Finished, Dropped:
+	case Todo, Finished, Dropped:
 		return nil
 	}
-	return invalid("status %q: want todo, doing, done or dropped", st)
+	return invalid("status %q: want todo, done or dropped", st)
 }
 
 // MarkProject sets a project's state.
@@ -621,7 +631,7 @@ func (s *Store) GetTask(ctx context.Context, id int64) (Task, error) {
 type TaskFilter struct {
 	ProjectID int64
 	Status    Status
-	// Open keeps only todo and doing tasks.
+	// Open keeps only todo tasks.
 	Open bool
 	// Unarchived leaves out archived tasks.
 	Unarchived bool
@@ -644,7 +654,7 @@ func (s *Store) ListTasks(ctx context.Context, f TaskFilter) ([]Task, error) {
 		args = append(args, string(f.Status))
 	}
 	if f.Open {
-		where = append(where, "status IN ('todo','doing')")
+		where = append(where, "status = 'todo'")
 	}
 	if f.Unarchived {
 		where = append(where, "archived = 0")
@@ -837,13 +847,13 @@ func trimBlankLines(s string) string {
 	return strings.TrimRight(strings.Join(lines, "\n"), " \t\r")
 }
 
-// MarkTask sets a task's status. Marking a task todo or doing also brings
-// it out of the archive, since only finished tasks are archived.
+// MarkTask sets a task's status. Marking a task todo also brings it out
+// of the archive, since only finished tasks are archived.
 func (s *Store) MarkTask(ctx context.Context, id int64, st Status) error {
 	if err := checkStatus(st); err != nil {
 		return err
 	}
-	reopened := st == Todo || st == Doing
+	reopened := st == Todo
 	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status = ?, archived = CASE WHEN ? THEN 0 ELSE archived END WHERE id = ?`, string(st), reopened, id)
 	if err != nil {
 		return err

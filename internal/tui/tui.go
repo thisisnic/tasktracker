@@ -1217,7 +1217,7 @@ func (m *model) containers(t target) []target {
 	return found
 }
 
-// advance is the space bar: a task steps todo, doing, done; a subtask
+// advance is the space bar: a task steps todo, done, todo; a subtask
 // toggles its tick; a project steps active, done, shelved. An area has
 // no state to step.
 func (m *model) advance() {
@@ -1455,7 +1455,6 @@ var (
 	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	selectedStyle = lipgloss.NewStyle().Reverse(true)
 	doneStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
-	doingStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	overdueStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	labelStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	projectStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
@@ -1537,8 +1536,6 @@ func (m *model) viewList(w, h int) string {
 // statusGlyph is the mark in front of a task.
 func statusGlyph(s task.Status) string {
 	switch s {
-	case task.Doing:
-		return "◐"
 	case task.Finished:
 		return "●"
 	case task.Dropped:
@@ -1640,9 +1637,6 @@ func (m *model) viewRow(r row, selected bool, w int) string {
 		t := r.task.Task
 		if t.Overdue(m.now()) && strings.HasSuffix(tail, t.Due) {
 			tail = tail[:len(tail)-len(t.Due)] + overdueStyle.Render(t.Due)
-		}
-		if t.Status == task.Doing {
-			head = strings.Replace(head, "◐", doingStyle.Render("◐"), 1)
 		}
 	}
 	return head + tail
@@ -1786,8 +1780,6 @@ func statusText(s task.Status) string {
 	switch s {
 	case task.Finished:
 		return doneStyle.Render("done")
-	case task.Doing:
-		return doingStyle.Render("doing")
 	case task.Dropped:
 		return dimStyle.Render("dropped")
 	}

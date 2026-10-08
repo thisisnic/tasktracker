@@ -714,7 +714,7 @@ export class AppState {
     }
   }
 
-  /** space: a task steps todo, doing, done; a subtask toggles its tick;
+  /** space: a task steps todo, done, todo; a subtask toggles its tick;
    * a project steps active, done, shelved, asking first before leaving
    * active. An area has no state to step. */
   async advance(): Promise<void> {
@@ -729,27 +729,10 @@ export class AppState {
       case "heading":
         this.status = headingHint;
         return;
-      case "subtask": {
-        const s = r.subtask!;
-        const done = !s.done;
-        const status = `${done ? "ticked" : "unticked"} subtask #${s.id}`;
-        if (await this.write(() => this.api.tickSubtask(s.id, done))) this.say(status);
-        return;
-      }
-      case "task": {
-        const t = r.task!.task;
-        const next = nextStatus(t.status);
-        let status = `task #${t.id} ${next}`;
-        if (t.archived) {
-          // An archived task shown with f: stepping it back to todo
-          // reopens it, which takes it out of the archive.
-          status += " (back from the archive)";
-        } else if (next === "done") {
-          status += this.finishedHint();
-        }
-        if (await this.write(() => this.api.editTask(t.id, { status: next }))) this.say(status);
-        return;
-      }
+      case "subtask":
+        return this.tickSubtask(r.subtask!);
+      case "task":
+        return this.setStatus(r.task!.task, nextStatus(r.task!.task.status));
       case "project": {
         const p = r.project!.project;
         if (nextState(p.state) !== "active") {
@@ -767,6 +750,46 @@ export class AppState {
     let status = `project #${id} ${next}`;
     if (next !== "active") status += this.hiddenHint("finished");
     if (await this.write(() => this.api.editProject(id, { state: next }))) this.say(status);
+  }
+
+  /** The checkbox's click: a task is ticked done or unticked back to
+   * todo, and a subtask toggles its tick. A dropped task's box is
+   * clear, so a click on it ticks it done; space on that row would
+   * reopen it instead, which is not what a tick says. Only tasks and
+   * subtasks have a box. */
+  async tick(): Promise<void> {
+    if (!this.settled()) return;
+    const r = this.selected();
+    if (r?.kind === "subtask") {
+      this.clearMessages();
+      return this.tickSubtask(r.subtask!);
+    }
+    if (r?.kind === "task") {
+      this.clearMessages();
+      return this.setStatus(r.task!.task, r.task!.task.status === "done" ? "todo" : "done");
+    }
+  }
+
+  private async tickSubtask(s: Subtask): Promise<void> {
+    const done = !s.done;
+    const status = `${done ? "ticked" : "unticked"} subtask #${s.id}`;
+    if (await this.write(() => this.api.tickSubtask(s.id, done))) this.say(status);
+  }
+
+  /** Writes a task's status and says where that leaves it. */
+  private async setStatus(t: Task, next: Status): Promise<void> {
+    let status = `task #${t.id} ${next}`;
+    if (t.archived && next === "todo") {
+      // An archived task shown with f: reopening it takes it out of
+      // the archive.
+      status += " (back from the archive)";
+    } else if (t.archived) {
+      // An archived dropped task ticked done: it stays archived.
+      status += " (still archived)";
+    } else if (next === "done") {
+      status += this.finishedHint();
+    }
+    if (await this.write(() => this.api.editTask(t.id, { status: next }))) this.say(status);
   }
 
   /** x: a task is dropped, a project shelved. Pressing it again on a

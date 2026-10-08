@@ -76,7 +76,7 @@ func taskListCmd(dbPath *string) *cobra.Command {
 		Short: "List tasks",
 		Long: `List tasks under their projects. Finished tasks stay listed until they are
 archived; --all includes archived tasks and finished projects, and --open
-keeps only todo and doing tasks. --due lists open tasks with a due date,
+keeps only todo tasks. --due lists open tasks with a due date,
 soonest first; add --all for finished ones too. --project or --status
 narrow the list.`,
 		Args: cobra.NoArgs,
@@ -133,9 +133,9 @@ narrow the list.`,
 		},
 	}
 	cmd.Flags().Int64Var(&f.ProjectID, "project", 0, "only tasks in this project")
-	cmd.Flags().StringVar(&status, "status", "", "only tasks with this status: todo, doing, done or dropped")
+	cmd.Flags().StringVar(&status, "status", "", "only tasks with this status: todo, done or dropped")
 	cmd.Flags().BoolVar(&f.Due, "due", false, "only tasks with a due date, soonest first")
-	cmd.Flags().BoolVar(&f.Open, "open", false, "only todo and doing tasks")
+	cmd.Flags().BoolVar(&f.Open, "open", false, "only todo tasks")
 	cmd.Flags().BoolVar(&all, "all", false, "include archived tasks and finished projects")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print as JSON")
 	cmd.MarkFlagsMutuallyExclusive("open", "status")
@@ -400,7 +400,7 @@ copy one.`,
 
 func taskMarkCmd(dbPath *string) *cobra.Command {
 	return &cobra.Command{
-		Use:   "mark ID todo|doing|done|dropped",
+		Use:   "mark ID todo|done|dropped",
 		Short: "Set a task's status",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {

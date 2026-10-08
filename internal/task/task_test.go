@@ -120,7 +120,7 @@ func TestDueArithmetic(t *testing.T) {
 		{"2026-09-16", Todo, -1, true, true},
 		{"2026-09-16", Finished, -1, true, false},
 		{"2026-09-16", Dropped, -1, true, false},
-		{"2026-09-20", Doing, 3, true, false},
+		{"2026-09-20", Todo, 3, true, false},
 		{"garbage", Todo, 0, false, false},
 	}
 	for _, c := range cases {
@@ -144,18 +144,20 @@ func TestParseStateAndStatus(t *testing.T) {
 	if _, err := ParseState("paused"); err == nil {
 		t.Error("ParseState accepted paused")
 	}
-	for in, want := range map[string]Status{"todo": Todo, "to-do": Todo, "DOING": Doing, "in-progress": Doing, "done": Finished, "finished": Finished, "dropped": Dropped, "drop": Dropped} {
+	for in, want := range map[string]Status{"todo": Todo, "to-do": Todo, "DONE": Finished, "done": Finished, "finished": Finished, "dropped": Dropped, "drop": Dropped} {
 		if got, err := ParseStatus(in); err != nil || got != want {
 			t.Errorf("ParseStatus(%q) = %q, %v", in, got, err)
 		}
 	}
-	if _, err := ParseStatus("blocked"); err == nil {
-		t.Error("ParseStatus accepted blocked")
+	for _, bad := range []string{"blocked", "doing", "in-progress"} {
+		if _, err := ParseStatus(bad); err == nil {
+			t.Errorf("ParseStatus accepted %q", bad)
+		}
 	}
 }
 
 func TestStatusNext(t *testing.T) {
-	for from, want := range map[Status]Status{Todo: Doing, Doing: Finished, Finished: Todo, Dropped: Todo} {
+	for from, want := range map[Status]Status{Todo: Finished, Finished: Todo, Dropped: Todo} {
 		if got := from.Next(); got != want {
 			t.Errorf("%s.Next() = %s, want %s", from, got, want)
 		}
@@ -180,7 +182,7 @@ func TestNormaliseGoalIDs(t *testing.T) {
 func TestNodeCounts(t *testing.T) {
 	p := ProjectNode{Tasks: []TaskNode{
 		{Task: Task{Status: Todo}, Subtasks: []Subtask{{Done: true}, {Done: false}, {Done: true}}},
-		{Task: Task{Status: Doing}},
+		{Task: Task{Status: Todo}},
 		{Task: Task{Status: Finished}},
 		{Task: Task{Status: Dropped}},
 	}}

@@ -115,7 +115,7 @@ class Fake {
         this.writes++;
         const t = this.task(id);
         if (patch.status) t.status = patch.status;
-        if (t.status === "todo" || t.status === "doing") t.archived = false;
+        if (t.status === "todo") t.archived = false;
         return { ...t };
       },
       archiveTask: async (id: number, archived: boolean) => {
@@ -156,7 +156,11 @@ class Fake {
         this.writes++;
         return { id, task_id: 1, title, done: false, created_at: "" };
       },
-      tickSubtask: notImplemented,
+      tickSubtask: async (id: number, done: boolean) => {
+        this.calls.push(`tickSubtask ${id} ${done}`);
+        this.writes++;
+        return { id, task_id: 1, title: "x", done, created_at: "" };
+      },
       deleteSubtask: notImplemented,
     };
   }
@@ -173,10 +177,10 @@ async function open(): Promise<{ app: AppState; fake: Fake; clock: { date: strin
   return { app, fake, clock };
 }
 
-/** Puts a task one step from done, so advance finishes it. */
-function doing(fake: Fake, id: number) {
+/** Finishes a task behind the page's back, as the CLI would. */
+function finish(fake: Fake, id: number) {
   eachTask(fake.data, (_, t) => {
-    if (t.task.id === id) t.task.status = "doing";
+    if (t.task.id === id) t.task.status = "done";
   });
 }
 
@@ -280,8 +284,6 @@ describe("switching views", () => {
 describe("finishing a task", () => {
   it("by deadline drops the row and lands on the next task, not the heading that slid in", async () => {
     const { app, fake } = await open();
-    doing(fake, 2);
-    await app.reload();
     app.toggleView();
     selectKey(app, "task:2"); // alone under Next 7 days; Longer's heading follows
     await app.advance();
@@ -291,9 +293,7 @@ describe("finishing a task", () => {
   });
 
   it("by project keeps the row, greyed, and says z archives it", async () => {
-    const { app, fake } = await open();
-    doing(fake, 2);
-    await app.reload();
+    const { app } = await open();
     selectKey(app, "task:2");
     await app.advance();
     expect(app.status).toBe("task #2 done; z archives it");
@@ -301,9 +301,7 @@ describe("finishing a task", () => {
   });
 
   it("by deadline lands on the task before when the last one goes", async () => {
-    const { app, fake } = await open();
-    doing(fake, 4);
-    await app.reload();
+    const { app } = await open();
     app.toggleView();
     selectKey(app, "task:4"); // the last row
     await app.advance();
@@ -362,6 +360,61 @@ describe("archiving", () => {
     expect(app.status).toBe(
       "hiding archived tasks and finished projects; here that drops open tasks in finished projects",
     );
+  });
+});
+
+describe("the checkbox", () => {
+  it("ticks a task done, with space's message", async () => {
+    const { app, fake } = await open();
+    selectKey(app, "task:2");
+    await app.tick();
+    expect(fake.calls).toEqual(['editTask 2 {"status":"done"}']);
+    expect(app.status).toBe("task #2 done; z archives it");
+    expect(selected(app)).toBe("task:2");
+  });
+
+  it("unticks a done task back to todo", async () => {
+    const { app, fake } = await open();
+    selectKey(app, "task:5");
+    await app.tick();
+    expect(fake.calls).toEqual(['editTask 5 {"status":"todo"}']);
+    expect(app.status).toBe("task #5 todo");
+  });
+
+  it("ticks a dropped task done, where space would reopen it", async () => {
+    const { app, fake } = await open();
+    fake.data.projects[0]!.tasks[0]!.task.status = "dropped";
+    await app.reload();
+    selectKey(app, "task:4");
+    await app.tick();
+    expect(fake.calls).toEqual(['editTask 4 {"status":"done"}']);
+    expect(app.status).toBe("task #4 done; z archives it");
+    fake.data.projects[0]!.tasks[0]!.task.status = "dropped";
+    await app.reload();
+    await app.advance();
+    expect(fake.calls).toEqual(['editTask 4 {"status":"done"}', 'editTask 4 {"status":"todo"}']);
+    expect(app.status).toBe("task #4 todo");
+  });
+
+  it("leaves an archived dropped task archived when ticked done", async () => {
+    const { app, fake } = await open();
+    const t = fake.data.projects[0]!.tasks[1]!.task;
+    t.status = "dropped";
+    t.archived = true;
+    await app.toggleShowAll();
+    selectKey(app, "task:5");
+    await app.tick();
+    expect(fake.calls).toEqual(['editTask 5 {"status":"done"}']);
+    expect(app.status).toBe("task #5 done (still archived)");
+    expect(app.rows.find((r) => key(rowTarget(r)) === "task:5")?.task?.task.archived).toBe(true);
+  });
+
+  it("toggles a subtask", async () => {
+    const { app, fake } = await open();
+    selectKey(app, "subtask:2");
+    await app.tick();
+    expect(fake.calls).toEqual(["tickSubtask 2 true"]);
+    expect(app.status).toBe("ticked subtask #2");
   });
 });
 
@@ -474,9 +527,7 @@ describe("the drawer", () => {
   });
 
   it("closes when a task finished by deadline leaves the list", async () => {
-    const { app, fake } = await open();
-    doing(fake, 2);
-    await app.reload();
+    const { app } = await open();
     app.toggleView();
     selectKey(app, "task:2");
     app.openDrawer();
@@ -616,7 +667,7 @@ describe("a write that failed", () => {
     selectKey(flaky, "task:2");
     await flaky.advance();
     expect(flaky.error).toBe("read back failed");
-    expect(flaky.rows.find((r) => key(rowTarget(r)) === "task:2")?.task?.task.status).toBe("doing");
+    expect(flaky.rows.find((r) => key(rowTarget(r)) === "task:2")?.task?.task.status).toBe("done");
     expect(flaky.inFlight).toBe(false);
   });
 });
@@ -629,14 +680,14 @@ describe("a second press while a write is in flight", () => {
     const first = app.advance();
     await new Promise((r) => setTimeout(r, 0));
     await app.advance();
-    expect(fake.calls).toEqual(['editTask 2 {"status":"doing"}']);
+    expect(fake.calls).toEqual(['editTask 2 {"status":"done"}']);
     fake.held[0]!();
     await first;
-    expect(app.status).toBe("task #2 doing");
+    expect(app.status).toBe("task #2 done; z archives it");
     fake.hold = false;
     await app.advance();
-    expect(fake.calls).toEqual(['editTask 2 {"status":"doing"}', 'editTask 2 {"status":"done"}']);
-    expect(app.status).toBe("task #2 done; z archives it");
+    expect(fake.calls).toEqual(['editTask 2 {"status":"done"}', 'editTask 2 {"status":"todo"}']);
+    expect(app.status).toBe("task #2 todo");
   });
 });
 
@@ -848,12 +899,12 @@ describe("changes from elsewhere", () => {
     // The CLI writes while the form is open: the poll leaves the form
     // alone, and the save's own reload takes the change in and says so.
     fake.version = 2;
-    doing(fake, 2);
+    finish(fake, 2);
     await app.poll();
     expect(app.rows.find((r) => key(rowTarget(r)) === "task:2")?.task?.task.status).toBe("todo");
     await app.saved({ kind: "task", id: 1 }, "saved task #1");
     expect(app.status).toBe("saved task #1; changed elsewhere, reloaded");
-    expect(app.rows.find((r) => key(rowTarget(r)) === "task:2")?.task?.task.status).toBe("doing");
+    expect(app.rows.find((r) => key(rowTarget(r)) === "task:2")?.task?.task.status).toBe("done");
     // The server's own write count moving on its own is this page's
     // doing, or another tab's, and is not noted after an own write.
     fake.writes++;
@@ -896,9 +947,9 @@ describe("changes from elsewhere", () => {
     // between is in the database, and SQLite's data version on the new
     // connection does not say so.
     fake.epoch = 2;
-    doing(fake, 2);
+    finish(fake, 2);
     await app.poll();
-    expect(app.rows.find((r) => key(rowTarget(r)) === "task:2")?.task?.task.status).toBe("doing");
+    expect(app.rows.find((r) => key(rowTarget(r)) === "task:2")?.task?.task.status).toBe("done");
     expect(app.status).toBe("changed elsewhere, reloaded");
   });
 
@@ -913,7 +964,7 @@ describe("changes from elsewhere", () => {
     const { app } = await open();
     selectKey(app, "task:2");
     await app.advance();
-    expect(app.status).toBe("task #2 doing");
+    expect(app.status).toBe("task #2 done; z archives it");
     await app.saved({ kind: "task", id: 2 }, "saved task #2");
     expect(app.status).toBe("saved task #2");
   });
@@ -931,12 +982,12 @@ describe("changes from elsewhere", () => {
     expect(fake.held.length).toBe(2);
     fake.held[1]!();
     await pressed;
-    expect(app.status).toBe("task #2 doing");
+    expect(app.status).toBe("task #2 done; z archives it");
     fake.held[0]!();
     await polled;
-    expect(app.status).toBe("task #2 doing");
+    expect(app.status).toBe("task #2 done; z archives it");
     const t = app.rows.find((r) => key(rowTarget(r)) === "task:2")?.task?.task;
-    expect(t?.status).toBe("doing");
+    expect(t?.status).toBe("done");
     expect(selected(app)).toBe("task:2");
   });
 
@@ -953,13 +1004,13 @@ describe("changes from elsewhere", () => {
     expect(fake.held.length).toBe(1);
     fake.held[0]!();
     await pressed;
-    expect(app.status).toBe("task #2 doing");
+    expect(app.status).toBe("task #2 done; z archives it");
     expect(selected(app)).toBe("task:2");
     // Afterwards the poll looks again, and with the write's version
     // already loaded, has nothing to do.
     fake.hold = false;
     await app.poll();
-    expect(app.status).toBe("task #2 doing");
+    expect(app.status).toBe("task #2 done; z archives it");
   });
 
   it("are not acted on by a poll that was answering when the page wrote", async () => {
@@ -970,14 +1021,14 @@ describe("changes from elsewhere", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(fake.heldVersions.length).toBe(1);
     await app.advance();
-    expect(app.status).toBe("task #2 doing");
+    expect(app.status).toBe("task #2 done; z archives it");
     // The version answer arrives after the write: the poll lets the
     // write's own reload stand rather than note it as from elsewhere.
     fake.heldVersions[0]!();
     await polled;
-    expect(app.status).toBe("task #2 doing");
+    expect(app.status).toBe("task #2 done; z archives it");
     const t = app.rows.find((r) => key(rowTarget(r)) === "task:2")?.task?.task;
-    expect(t?.status).toBe("doing");
+    expect(t?.status).toBe("done");
   });
 
   it("do not undo a move made while the server was answering", async () => {

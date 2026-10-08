@@ -360,7 +360,6 @@ func (f *taskForm) build(title string, withStatus bool, projects []task.Project,
 	if withStatus {
 		fields = append(fields, huh.NewSelect[task.Status]().Title("Status").Options(
 			huh.NewOption("todo", task.Todo),
-			huh.NewOption("doing", task.Doing),
 			huh.NewOption("done", task.Finished),
 			huh.NewOption("dropped", task.Dropped),
 		).Value(&f.status))
