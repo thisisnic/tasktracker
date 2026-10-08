@@ -62,34 +62,29 @@ func open(t *testing.T) *Store {
 func TestProjectLifecycle(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)
-	p, err := s.AddProject(ctx, NewProject{Name: "  house ", Description: " fix it up ", GoalIDs: []int64{4, 2, 4}})
+	p, err := s.AddProject(ctx, NewProject{Name: "  house ", Description: " fix it up "})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.ID != 1 || p.Name != "house" || p.Description != "fix it up" || p.State != Active || !reflect.DeepEqual(p.GoalIDs, []int64{2, 4}) || p.CreatedAt.IsZero() {
+	if p.ID != 1 || p.Name != "house" || p.Description != "fix it up" || p.State != Active || p.CreatedAt.IsZero() {
 		t.Errorf("added project = %+v", p)
 	}
 	if _, err := s.AddProject(ctx, NewProject{Name: " "}); err == nil {
 		t.Error("blank name accepted")
 	}
-	if _, err := s.AddProject(ctx, NewProject{Name: "x", GoalIDs: []int64{0}}); err == nil {
-		t.Error("goal id 0 accepted")
-	}
 
 	name, desc := "home", ""
-	none := []int64{}
-	p, err = s.UpdateProject(ctx, p.ID, ProjectEdit{Name: &name, Description: &desc, GoalIDs: &none})
+	p, err = s.UpdateProject(ctx, p.ID, ProjectEdit{Name: &name, Description: &desc})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Name != "home" || p.Description != "" || p.GoalIDs != nil {
+	if p.Name != "home" || p.Description != "" {
 		t.Errorf("updated project = %+v", p)
 	}
-	goals := []int64{7}
 	done := Done
-	p, err = s.UpdateProject(ctx, p.ID, ProjectEdit{GoalIDs: &goals, State: &done})
-	if err != nil || !reflect.DeepEqual(p.GoalIDs, []int64{7}) || p.State != Done {
-		t.Errorf("goal and state edit = %+v, %v", p, err)
+	p, err = s.UpdateProject(ctx, p.ID, ProjectEdit{State: &done})
+	if err != nil || p.State != Done || p.Name != "home" {
+		t.Errorf("state edit = %+v, %v", p, err)
 	}
 	bad := State("paused")
 	if _, err := s.UpdateProject(ctx, p.ID, ProjectEdit{State: &bad}); err == nil {
@@ -115,7 +110,7 @@ func TestProjectLifecycle(t *testing.T) {
 	active, _ := s.ListProjects(ctx, ProjectFilter{})
 	all, _ := s.ListProjects(ctx, ProjectFilter{All: true})
 	shelved, _ := s.ListProjects(ctx, ProjectFilter{State: Shelved})
-	if len(active) != 0 || len(all) != 1 || len(shelved) != 1 || shelved[0].State != Shelved || !reflect.DeepEqual(shelved[0].GoalIDs, []int64{7}) {
+	if len(active) != 0 || len(all) != 1 || len(shelved) != 1 || shelved[0].State != Shelved {
 		t.Errorf("lists: active=%v all=%v shelved=%v", active, all, shelved)
 	}
 
@@ -127,10 +122,6 @@ func TestProjectLifecycle(t *testing.T) {
 	}
 	if err := s.DeleteProject(ctx, p.ID); !errors.Is(err, ErrNotFound) {
 		t.Errorf("delete twice = %v", err)
-	}
-	var n int
-	if err := s.db.QueryRow(`SELECT count(*) FROM project_goals`).Scan(&n); err != nil || n != 0 {
-		t.Errorf("goal links left behind: %d, %v", n, err)
 	}
 }
 
@@ -658,7 +649,7 @@ func TestSubtasksAndCascade(t *testing.T) {
 func TestTree(t *testing.T) {
 	ctx := context.Background()
 	s := open(t)
-	p := addProject(t, s, NewProject{Name: "a", GoalIDs: []int64{1}})
+	p := addProject(t, s, NewProject{Name: "a"})
 	q := addProject(t, s, NewProject{Name: "b"})
 	empty := addProject(t, s, NewProject{Name: "c"})
 	check(t, s.MarkProject(ctx, q.ID, Done))
@@ -680,9 +671,6 @@ func TestTree(t *testing.T) {
 	}
 	if len(tree) != 2 || tree[0].Project.ID != p.ID || tree[1].Project.ID != empty.ID {
 		t.Fatalf("open tree projects = %+v", tree)
-	}
-	if !reflect.DeepEqual(tree[0].Project.GoalIDs, []int64{1}) {
-		t.Errorf("goal ids missing from tree: %+v", tree[0].Project)
 	}
 	// The dropped task stays, greyed by the UI; the archived one goes.
 	if len(tree[0].Tasks) != 2 || tree[0].Tasks[0].Task.ID != t1.ID || len(tree[0].Tasks[0].Subtasks) != 2 || tree[0].Tasks[1].Task.ID != t2.ID || len(tree[0].Tasks[1].Subtasks) != 1 {

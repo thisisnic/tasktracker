@@ -24,20 +24,10 @@ const DefaultPort = 7344
 type Config struct {
 	// Port is the loopback port the browser UI and its API are served
 	// on. Only the server reads it, so Load does not check its range:
-	// a port out of range must not keep the TUI from backing up or
-	// finding goaltracker. The server checks it, see PortError.
-	Port        int         `toml:"port"`
-	Backup      Backup      `toml:"backup"`
-	Goaltracker Goaltracker `toml:"goaltracker"`
-}
-
-// Goaltracker says where goaltracker keeps its database, so projects can
-// show the statements of the goals they link to. Read-only.
-type Goaltracker struct {
-	// DB is the path to goaltracker's SQLite database. Empty means
-	// goaltracker's own default: $GOALTRACKER_DB, or
-	// $XDG_DATA_HOME/goaltracker/goaltracker.db.
-	DB string `toml:"db"`
+	// a port out of range must not keep the TUI from backing up. The
+	// server checks it, see PortError.
+	Port   int    `toml:"port"`
+	Backup Backup `toml:"backup"`
 }
 
 // Backup configures encrypted snapshots of the database.
@@ -101,7 +91,6 @@ func Load(path string) (Config, error) {
 	}
 	c.Backup.Dir = ExpandHome(c.Backup.Dir)
 	c.Backup.IdentityFile = ExpandHome(c.Backup.IdentityFile)
-	c.Goaltracker.DB = ExpandHome(c.Goaltracker.DB)
 	return c, nil
 }
 
@@ -134,10 +123,5 @@ on_quit = true
 # and push after each backup. Needs credentials that work without a prompt,
 # such as an SSH key loaded in an agent.
 git = false
-
-[goaltracker]
-# Where goaltracker keeps its database, read only to show the goals a
-# project links to. Leave blank for goaltracker's own default location.
-db = ""
 `, DefaultPort, recipient, identityFile)
 }

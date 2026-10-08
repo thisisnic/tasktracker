@@ -27,8 +27,8 @@ func TestLoadPort(t *testing.T) {
 		t.Errorf("PortError for 8080: %v", err)
 	}
 	// A port out of range is the server's problem alone: Load reads the
-	// rest of the file as usual, paths expanded, so the TUI's backup and
-	// goal lookup are not turned off by it.
+	// rest of the file as usual, paths expanded, so the TUI's backup is
+	// not turned off by it.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	for _, bad := range []string{"port = 0\n", "port = 70000\n", "port = -1\n"} {
@@ -68,22 +68,6 @@ func TestLoadExpandsHome(t *testing.T) {
 	}
 	if c.Backup.Recipient != "age1abc" || !c.Backup.OnQuit || c.Backup.Git || !c.Backup.Configured() {
 		t.Errorf("fields: %+v", c.Backup)
-	}
-}
-
-func TestLoadExpandsGoaltrackerDB(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	p := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(p, []byte("[goaltracker]\ndb = \"~/g/goaltracker.db\"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	c, err := Load(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Goaltracker.DB != filepath.Join(home, "g", "goaltracker.db") {
-		t.Errorf("Goaltracker.DB = %q, not expanded", c.Goaltracker.DB)
 	}
 }
 

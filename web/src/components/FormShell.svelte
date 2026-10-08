@@ -103,20 +103,4 @@
   :global(.form select:focus) {
     outline: var(--focus-ring);
   }
-
-  :global(.form .checks) {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-    max-height: 12em;
-    overflow: auto;
-    color: var(--text-primary);
-  }
-
-  :global(.form .checks label) {
-    flex-direction: row;
-    align-items: center;
-    gap: var(--space-2);
-    color: var(--text-primary);
-  }
 </style>

@@ -39,11 +39,9 @@ type runner struct {
 func newRunner(t *testing.T) *runner {
 	t.Helper()
 	// Keep markers and any default paths out of the developer's real
-	// config and data directories, and keep goaltracker lookups away from
-	// their real goals.
+	// config and data directories.
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("XDG_DATA_HOME", t.TempDir())
-	t.Setenv("GOALTRACKER_DB", filepath.Join(t.TempDir(), "absent.db"))
 	return &runner{t: t, db: filepath.Join(t.TempDir(), "tasktracker.db")}
 }
 
@@ -81,27 +79,9 @@ func (r *runner) runBoth(stdin string, wantErr bool, args ...string) (string, st
 	return out.String(), errOut.String()
 }
 
-// goaltrackerDB writes a database shaped like goaltracker's and points
-// GOALTRACKER_DB at it.
-func goaltrackerDB(t *testing.T) {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "goaltracker.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if _, err := db.Exec(`CREATE TABLE goals (id INTEGER PRIMARY KEY, statement TEXT NOT NULL, period TEXT NOT NULL);
-		INSERT INTO goals VALUES (3, 'run 500 km', '2026'), (7, 'finish the garden', '2026-Q3')`); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("GOALTRACKER_DB", path)
-}
-
 func TestProjectLifecycle(t *testing.T) {
 	r := newRunner(t)
-	goaltrackerDB(t)
-	out := r.run("", false, "project", "add", "house", "--description", "fix it up", "--goal", "7", "--goal", "3")
+	out := r.run("", false, "project", "add", "house", "--description", "fix it up")
 	if !strings.Contains(out, "added project 1: house") {
 		t.Fatalf("add: %q", out)
 	}
@@ -111,7 +91,7 @@ func TestProjectLifecycle(t *testing.T) {
 	}
 
 	out = r.run("", false, "project", "show", "1")
-	for _, want := range []string{"#1  house", "state:  active", "about:  fix it up", "#3 run 500 km", "#7 finish the garden"} {
+	for _, want := range []string{"#1  house", "state:  active", "about:  fix it up"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("show missing %q:\n%s", want, out)
 		}
@@ -120,25 +100,22 @@ func TestProjectLifecycle(t *testing.T) {
 	if err := json.Unmarshal([]byte(r.run("", false, "project", "show", "1", "--json")), &detail); err != nil {
 		t.Fatal(err)
 	}
-	if len(detail.Goals) != 2 || detail.Goals[0].ID != 3 || detail.Goals[0].Statement != "run 500 km" || len(detail.Tasks) != 0 {
+	if detail.Name != "house" || detail.Description != "fix it up" || len(detail.Tasks) != 0 {
 		t.Errorf("show --json: %+v", detail)
 	}
 
 	out = r.run("", false, "project", "list")
-	if !strings.Contains(out, "ID") || !strings.Contains(out, "house") || !strings.Contains(out, "#3 #7") {
+	if !strings.Contains(out, "ID") || !strings.Contains(out, "house") {
 		t.Errorf("list:\n%s", out)
 	}
 
-	r.run("", false, "project", "edit", "1", "--name", "home", "--goal", "3")
-	r.run("", false, "project", "edit", "2", "--no-goals", "--description", "")
+	r.run("", false, "project", "edit", "1", "--name", "home")
+	r.run("", false, "project", "edit", "2", "--description", "")
 	if msg := r.run("", true, "project", "edit", "1"); !strings.Contains(msg, "nothing to change") {
 		t.Errorf("edit with no flags: %q", msg)
 	}
-	if msg := r.run("", true, "project", "edit", "1", "--goal", "1", "--no-goals"); !strings.Contains(msg, "cannot both") {
-		t.Errorf("edit with both goal flags: %q", msg)
-	}
 	var ps []task.Project
-	if err := json.Unmarshal([]byte(r.run("", false, "project", "list", "--json")), &ps); err != nil || len(ps) != 2 || ps[0].Name != "home" || len(ps[0].GoalIDs) != 1 || ps[0].GoalIDs[0] != 3 {
+	if err := json.Unmarshal([]byte(r.run("", false, "project", "list", "--json")), &ps); err != nil || len(ps) != 2 || ps[0].Name != "home" {
 		t.Errorf("after edit: %+v, %v", ps, err)
 	}
 
@@ -168,21 +145,6 @@ func TestProjectLifecycle(t *testing.T) {
 	}
 	if out := r.run("", false, "project", "list"); !strings.Contains(out, "no projects") {
 		t.Errorf("empty list: %q", out)
-	}
-}
-
-func TestProjectShowWithoutGoaltracker(t *testing.T) {
-	r := newRunner(t) // GOALTRACKER_DB points at a file that does not exist
-	r.run("", false, "project", "add", "house", "--goal", "3")
-	out, errOut := r.runBoth("", false, "project", "show", "1")
-	if !strings.Contains(out, "  #3\n") {
-		t.Errorf("bare goal id not shown:\n%s", out)
-	}
-	if !strings.Contains(errOut, "goal statements not shown") {
-		t.Errorf("missing goaltracker not explained on stderr: %q", errOut)
-	}
-	if _, err := os.Stat(os.Getenv("GOALTRACKER_DB")); !os.IsNotExist(err) {
-		t.Error("show created a goaltracker database")
 	}
 }
 
@@ -704,21 +666,6 @@ func TestKeyBackupRestore(t *testing.T) {
 	}
 }
 
-func TestGoaltrackerPathFromConfig(t *testing.T) {
-	r := newRunner(t)
-	goaltrackerDB(t)
-	// The config names the database explicitly; the env var points elsewhere.
-	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(cfgPath, []byte("[goaltracker]\ndb = \""+os.Getenv("GOALTRACKER_DB")+"\"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("GOALTRACKER_DB", filepath.Join(t.TempDir(), "absent.db"))
-	r.run("", false, "project", "add", "house", "--goal", "3")
-	if out := r.run("", false, "--config", cfgPath, "project", "show", "1"); !strings.Contains(out, "#3 run 500 km") {
-		t.Errorf("config path not used:\n%s", out)
-	}
-}
-
 func TestAfterQuit(t *testing.T) {
 	r := newRunner(t)
 	root := t.TempDir()
@@ -857,19 +804,6 @@ func TestAfterQuitRetriesPush(t *testing.T) {
 	}
 	if log := git(remote, "log", "--format=%s", "main"); strings.Count(log, "tasktracker backup") != 2 {
 		t.Errorf("remote log after the retry:\n%s", log)
-	}
-}
-
-func TestGoalReaderReportsBadConfig(t *testing.T) {
-	r := newRunner(t)
-	cfgPath := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(cfgPath, []byte("[goaltracker\ndb = 1"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	r.run("", false, "project", "add", "house", "--goal", "3")
-	_, errOut := r.runBoth("", false, "--config", cfgPath, "project", "show", "1")
-	if !strings.Contains(errOut, "note: config:") || !strings.Contains(errOut, "goal statements not shown") {
-		t.Errorf("bad config not reported: %q", errOut)
 	}
 }
 
@@ -1157,8 +1091,8 @@ func TestServePortFromConfig(t *testing.T) {
 	}
 
 	// With --port the config's port is not used, so the note does not
-	// name the default port: a broken file is noted for the goal lookup
-	// alone, and a bad port in it not at all.
+	// name the default port: a broken file is noted as ignored, and a
+	// bad port in it not at all.
 	port = freePort(t)
 	for bad, want := range map[string]string{
 		"[backup\n":      "note: config: " + cfg + ": toml: ",
@@ -1180,7 +1114,7 @@ func TestServePortFromConfig(t *testing.T) {
 			t.Errorf("%q with --port: stdout %q", bad, out.String())
 		}
 		got := errOut.String()
-		if strings.Contains(got, "default port") || !strings.HasPrefix(got, want) || (want != "" && !strings.HasSuffix(got, "; using goaltracker's default database\n")) {
+		if strings.Contains(got, "default port") || !strings.HasPrefix(got, want) || (want != "" && !strings.HasSuffix(got, "; ignoring it\n")) {
 			t.Errorf("%q with --port: stderr %q, want prefix %q", bad, got, want)
 		}
 	}

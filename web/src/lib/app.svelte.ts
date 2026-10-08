@@ -12,7 +12,6 @@ import {
   nextState,
   nextStatus,
   type Area,
-  type Goals,
   type Outline,
   type Project,
   type ProjectEdit,
@@ -64,7 +63,6 @@ export class AppState {
   private api: Client;
   /** The version of the binary serving the page, for the top bar. */
   version = $state("");
-  goals = $state<Goals>({ readable: false, goals: [] });
   outline = $state<Outline>({ areas: [], projects: [] });
   /** Every area, flat, for paths and pick lists. */
   areas = $derived(flatAreas(this.outline));
@@ -235,10 +233,9 @@ export class AppState {
     this.shown = this.selectedTarget();
   }
 
-  /** The reload behind r: everything is read again, goals included,
-   * since another process may have changed any of it. */
+  /** The reload behind r: everything is read again, since another
+   * process may have changed any of it. */
   async refresh(): Promise<void> {
-    this.goals = await this.api.goals();
     await this.reload(undefined, false, true);
   }
 
@@ -318,9 +315,6 @@ export class AppState {
       const { version } = await this.api.version();
       if (!this.idle()) return;
       if (version !== this.loaded) {
-        const goals = await this.api.goals();
-        if (!this.idle()) return;
-        this.goals = goals;
         await this.reload();
         this.noteChangedElsewhere();
       }
@@ -1136,11 +1130,10 @@ export class AppState {
     await this.saved({ kind: "area", id }, `saved area #${id}`);
   }
 
-  /** Saves the project form. goals is the set the form holds, in any
-   * order. */
+  /** Saves the project form. */
   async saveProject(
     m: Extract<Modal, { kind: "project" }>,
-    f: { name: string; description: string; areaId: number; goals: number[]; state: State },
+    f: { name: string; description: string; areaId: number; state: State },
   ): Promise<void> {
     let id: number;
     if (m.existing) {
@@ -1149,12 +1142,11 @@ export class AppState {
       if (f.name !== p.name) patch.name = f.name;
       if (f.description !== (p.description ?? "")) patch.description = f.description;
       if (f.areaId !== (p.area_id ?? 0)) patch.area_id = f.areaId;
-      if (!sameIds(f.goals, p.goal_ids ?? [])) patch.goal_ids = f.goals;
       if (f.state !== p.state) patch.state = f.state;
       if (Object.keys(patch).length > 0) await this.api.editProject(p.id, patch);
       id = p.id;
     } else {
-      id = (await this.api.addProject(f.name, f.description, f.areaId, f.goals)).id;
+      id = (await this.api.addProject(f.name, f.description, f.areaId)).id;
     }
     await this.saved({ kind: "project", id }, `saved project #${id}`);
   }
@@ -1237,13 +1229,6 @@ export interface TaskFields {
   notes: string;
   status: Status;
   project: number;
-}
-
-/** Whether two goal sets hold the same ids, in any order. */
-function sameIds(a: number[], b: number[]): boolean {
-  const sa = [...new Set(a)].sort((x, y) => x - y);
-  const sb = [...new Set(b)].sort((x, y) => x - y);
-  return sa.length === sb.length && sa.every((v, i) => v === sb[i]);
 }
 
 /** The state of the database in a version the server reports: the

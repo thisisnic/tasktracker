@@ -18,7 +18,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/thisisnic/tasktracker/internal/goallink"
 	"github.com/thisisnic/tasktracker/internal/task"
 	_ "modernc.org/sqlite"
 )
@@ -28,19 +27,19 @@ var fixed = time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
 
 // setup builds a store with two projects, three tasks and two subtasks:
 //
-//	house (goal #3)
+//	house
 //	  paint the hall  due 2026-09-10 (overdue)   [x] buy paint  [ ] move furniture
 //	  fix the gate    due 2026-09-20
 //	work
 //	  email accountant
-func setup(t *testing.T, goals *goallink.Reader) (*model, *task.Store) {
+func setup(t *testing.T) (*model, *task.Store) {
 	t.Helper()
-	return setupAt(t, goals, filepath.Join(t.TempDir(), "tasktracker.db"))
+	return setupAt(t, filepath.Join(t.TempDir(), "tasktracker.db"))
 }
 
 // setupAt is setup with the database at path, for a test that opens a
 // second connection to it as another process would.
-func setupAt(t *testing.T, goals *goallink.Reader, path string) (*model, *task.Store) {
+func setupAt(t *testing.T, path string) (*model, *task.Store) {
 	t.Helper()
 	store, err := task.Open(path)
 	if err != nil {
@@ -54,7 +53,7 @@ func setupAt(t *testing.T, goals *goallink.Reader, path string) (*model, *task.S
 			t.Fatal(err)
 		}
 	}
-	house, err := store.AddProject(ctx, task.NewProject{Name: "house", Description: "fix it up", GoalIDs: []int64{3}})
+	house, err := store.AddProject(ctx, task.NewProject{Name: "house", Description: "fix it up"})
 	must(err)
 	work, err := store.AddProject(ctx, task.NewProject{Name: "work"})
 	must(err)
@@ -70,29 +69,13 @@ func setupAt(t *testing.T, goals *goallink.Reader, path string) (*model, *task.S
 	must(err)
 	must(store.TickSubtask(ctx, buy.ID, true))
 
-	m := newModel(ctx, store, goals)
+	m := newModel(ctx, store)
 	m.now = func() time.Time { return fixed }
 	if err := m.reload(); err != nil {
 		t.Fatal(err)
 	}
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	return m, store
-}
-
-// goaltrackerDB makes a database shaped like goaltracker's with goal #3.
-func goaltrackerDB(t *testing.T) *goallink.Reader {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "goaltracker.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if _, err := db.Exec(`CREATE TABLE goals (id INTEGER PRIMARY KEY, statement TEXT NOT NULL, period TEXT NOT NULL);
-		INSERT INTO goals VALUES (3, 'finish the garden', '2026-Q3'), (5, 'run 500 km', '2026')`); err != nil {
-		t.Fatal(err)
-	}
-	return goallink.New(path)
 }
 
 // send delivers msg to the model and then runs any command it returns,
@@ -253,13 +236,13 @@ func labels(m *model) []string {
 }
 
 func TestTreeRowsAndView(t *testing.T) {
-	m, _ := setup(t, nil)
+	m, _ := setup(t)
 	want := []string{"P:house", "T:paint the hall", "S:buy paint", "S:move furniture", "T:fix the gate", "P:work", "T:email accountant"}
 	if got := labels(m); !reflect.DeepEqual(got, want) {
 		t.Fatalf("rows = %v\nwant   %v", got, want)
 	}
 	view := plain(m)
-	for _, want := range []string{"tasktracker · by project", "house", "2 open", "fix it up", "#3", "paint the hall", "1/2", "2026-09-10", "[x] buy paint", "[ ] move furniture"} {
+	for _, want := range []string{"tasktracker · by project", "house", "2 open", "fix it up", "paint the hall", "1/2", "2026-09-10", "[x] buy paint", "[ ] move furniture"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("view missing %q", want)
 		}
@@ -289,20 +272,8 @@ func TestTreeRowsAndView(t *testing.T) {
 	}
 }
 
-func TestGoalLabels(t *testing.T) {
-	m, _ := setup(t, goaltrackerDB(t))
-	if !strings.Contains(plain(m), "#3 finish the garden") {
-		t.Errorf("goal statement not shown:\n%s", plain(m))
-	}
-	m2, _ := setup(t, goallink.New(filepath.Join(t.TempDir(), "absent.db")))
-	view := plain(m2)
-	if !strings.Contains(view, "#3") || strings.Contains(view, "finish the garden") || !strings.Contains(view, "not readable") {
-		t.Errorf("missing goaltracker not handled:\n%s", view)
-	}
-}
-
 func TestSpaceAdvances(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	ctx := context.Background()
 	press(m, "j", "space")
 	if tk, _ := store.GetTask(ctx, 1); tk.Status != task.Finished {
@@ -369,7 +340,7 @@ func TestSpaceAdvances(t *testing.T) {
 }
 
 func TestDropAndShelve(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	ctx := context.Background()
 	press(m, "j", "x")
 	if tk, _ := store.GetTask(ctx, 1); tk.Status != task.Dropped {
@@ -398,7 +369,7 @@ func TestDropAndShelve(t *testing.T) {
 }
 
 func TestArchive(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	ctx := context.Background()
 	press(m, "z") // on a project
 	if !strings.Contains(m.status, "only tasks are archived") {
@@ -462,7 +433,7 @@ func TestArchive(t *testing.T) {
 }
 
 func TestDeadlineView(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	ctx := context.Background()
 	press(m, "v")
 	if m.view != viewDeadline || !strings.Contains(m.status, "by deadline") {
@@ -636,7 +607,7 @@ func TestDeadlineView(t *testing.T) {
 // tree: on a heading, or on a task under it. Folds last across switches
 // between the views, and saving a task under a folded heading opens it.
 func TestDeadlineFold(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	ctx := context.Background()
 	press(m, "v", "g", "left") // on Overdue
 	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Overdue", "H:Next 7 days", "T:fix the gate", "H:No deadline", "T:email accountant"}) || m.status != "collapsed Overdue; ← shows its tasks again" {
@@ -745,7 +716,7 @@ func TestDeadlineFold(t *testing.T) {
 // only open task is under a folded heading: the cursor lands on that
 // heading rather than at the top.
 func TestLandByDeadlineFolded(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	m.collapsed[target{rowHeading, int64(bucketNone)}] = true
 	m.selectTarget(target{rowProject, 2}) // work: email accountant, undated
 	press(m, "v")
@@ -797,7 +768,7 @@ func TestLandByDeadlineFolded(t *testing.T) {
 }
 
 func TestDeleteFlow(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	ctx := context.Background()
 	press(m, "j", "j", "d")
 	if m.mode != modeConfirmDelete || !strings.Contains(plain(m), `delete subtask #1 "buy paint"`) {
@@ -833,7 +804,7 @@ func TestDeleteFlow(t *testing.T) {
 }
 
 func TestDeleteFailureStaysVisible(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	press(m, "j")
 	if err := store.DeleteTask(context.Background(), 1); err != nil {
 		t.Fatal(err)
@@ -845,7 +816,7 @@ func TestDeleteFailureStaysVisible(t *testing.T) {
 }
 
 func TestAddTaskViaForm(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	press(m, "G", "a") // under work
 	if m.mode != modeForm {
 		t.Fatal("a did not open the form")
@@ -904,7 +875,7 @@ func TestAddTaskViaForm(t *testing.T) {
 }
 
 func TestFormValidationAndCancel(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	press(m, "a", "enter") // empty title must not advance
 	typeText(m, "x")
 	press(m, "enter")
@@ -921,7 +892,7 @@ func TestFormValidationAndCancel(t *testing.T) {
 }
 
 func TestFormStaysOpenWhenSaveFails(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	press(m, "j", "e")
 	// Pull the task out from under the form so the save fails.
 	if err := store.DeleteTask(context.Background(), 1); err != nil {
@@ -947,7 +918,7 @@ func TestFormStaysOpenWhenSaveFails(t *testing.T) {
 // TestDeadlineOrder checks that tasks due the same day, and undated
 // tasks, keep their by-project order, across nested areas.
 func TestDeadlineOrder(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	ctx := context.Background()
 	home, err := store.AddArea(ctx, task.NewArea{Name: "home"})
 	if err != nil {
@@ -1016,7 +987,7 @@ func TestDeadlineOrder(t *testing.T) {
 	}
 	press(m, "A") // a project saved by deadline has no row here
 	typeText(m, "fence")
-	press(m, "enter", "enter", "enter", "enter")
+	press(m, "enter", "enter", "enter")
 	if m.mode != modeBrowse || m.err != nil || !strings.Contains(m.status, "saved project") || !strings.Contains(m.status, "v shows it by project") {
 		t.Errorf("A by deadline: mode=%v err=%v status=%q", m.mode, m.err, m.status)
 	}
@@ -1053,7 +1024,7 @@ func TestBucketOf(t *testing.T) {
 }
 
 func TestDeadlineViewRowStyling(t *testing.T) {
-	m, _ := setup(t, nil)
+	m, _ := setup(t)
 	press(m, "v", "j", "j", "j", "j") // fix the gate selected, past its heading; paint the hall is overdue and unselected
 	view := m.View().Content
 	lines := strings.Split(view, "\n")
@@ -1099,7 +1070,7 @@ func TestDeadlineViewRowStyling(t *testing.T) {
 }
 
 func TestCopyTaskViaForm(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	ctx := context.Background()
 	issue, notes := "owner/repo#1", "two coats"
 	if _, err := store.UpdateTask(ctx, 1, task.TaskEdit{Issue: &issue, Notes: &notes}); err != nil {
@@ -1167,7 +1138,7 @@ func TestCopyTaskViaForm(t *testing.T) {
 }
 
 func TestEditTaskViaForm(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	withNotes(t, m, store)
 	press(m, "j", "e")
 	if m.mode != modeForm {
@@ -1209,7 +1180,7 @@ func TestEditTaskViaForm(t *testing.T) {
 // the detail pane shows that its notes were cut, rather than dropping
 // them without a word.
 func TestLongDetailIsCutWithAMark(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	withNotes(t, m, store)
 	for i := range 20 {
 		if _, err := store.AddSubtask(context.Background(), 1, fmt.Sprintf("step %d", i)); err != nil {
@@ -1233,7 +1204,7 @@ func TestLongDetailIsCutWithAMark(t *testing.T) {
 func TestChangedTracksWrites(t *testing.T) {
 	after := func(keys ...string) (changed bool, status string) {
 		t.Helper()
-		m, _ := setup(t, nil)
+		m, _ := setup(t)
 		press(m, keys...)
 		if m.err != nil {
 			t.Fatalf("%v: %v", keys, m.err)
@@ -1284,7 +1255,7 @@ func TestChangedTracksWrites(t *testing.T) {
 // while a form or a confirmation is open.
 func TestPollSeesChangesElsewhere(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tasktracker.db")
-	m, _ := setupAt(t, nil, path)
+	m, _ := setupAt(t, path)
 	ctx := context.Background()
 	other, err := task.Open(path)
 	if err != nil {
@@ -1410,7 +1381,7 @@ func TestPollSeesChangesElsewhere(t *testing.T) {
 // adds its own note after it.
 func TestPollHintSurvivesReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tasktracker.db")
-	m, store := setupAt(t, nil, path)
+	m, store := setupAt(t, path)
 	other, err := task.Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -1487,7 +1458,7 @@ func TestPollHintSurvivesReload(t *testing.T) {
 // cannot be read is taken as changed.
 func TestChangedElsewhereAtQuit(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tasktracker.db")
-	m, store := setupAt(t, nil, path)
+	m, store := setupAt(t, path)
 	other, err := task.Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -1523,7 +1494,7 @@ func TestChangedElsewhereAtQuit(t *testing.T) {
 // deadline.
 func TestPollLandsByDeadline(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tasktracker.db")
-	m, _ := setupAt(t, nil, path)
+	m, _ := setupAt(t, path)
 	ctx := context.Background()
 	other, err := task.Open(path)
 	if err != nil {
@@ -1572,7 +1543,7 @@ func TestFoldsPersist(t *testing.T) {
 	if folds != path+"-folds" {
 		t.Errorf("FoldsPath = %q", folds)
 	}
-	m, store := setupAt(t, nil, path)
+	m, store := setupAt(t, path)
 	ctx := context.Background()
 	garden, err := store.AddArea(ctx, task.NewArea{Name: "garden"})
 	if err != nil {
@@ -1618,7 +1589,7 @@ func TestFoldsPersist(t *testing.T) {
 
 	// A fresh model with the same file opens with the same folds, and the
 	// rows reflect them.
-	again := newModel(ctx, store, nil)
+	again := newModel(ctx, store)
 	again.now = m.now
 	again.foldsPath = folds
 	if err := again.loadFolds(); err != nil {
@@ -1672,7 +1643,7 @@ func TestFoldsPersist(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Close()
-	fresh := newModel(ctx, store, nil)
+	fresh := newModel(ctx, store)
 	fresh.foldsPath = folds
 	if err := fresh.loadFolds(); err != nil || !fresh.collapsed[target{rowProject, 2}] {
 		t.Fatalf("fold on the old id not read: %v, folds=%v", err, fresh.collapsed)
@@ -1694,7 +1665,7 @@ func TestFoldsPersist(t *testing.T) {
 	if err := os.WriteFile(folds, []byte("project 1 2026-09-01T00:00:00Z\n\nproject one\nheading 1\nheading 9\narea 1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	bad := newModel(ctx, store, nil)
+	bad := newModel(ctx, store)
 	bad.foldsPath = folds
 	err = bad.loadFolds()
 	if err == nil || !strings.Contains(err.Error(), "line 3") || !strings.Contains(err.Error(), "project one") || !strings.Contains(err.Error(), "2 more") {
@@ -1713,7 +1684,7 @@ func TestFoldsPersist(t *testing.T) {
 		if err := os.Chmod(folds, 0); err != nil {
 			t.Fatal(err)
 		}
-		shut := newModel(ctx, store, nil)
+		shut := newModel(ctx, store)
 		shut.foldsPath = folds
 		if err := shut.loadFolds(); err == nil || !strings.Contains(err.Error(), "not saved this session") || len(shut.collapsed) != 0 {
 			t.Errorf("unreadable file: %v, folds=%v", err, shut.collapsed)
@@ -1822,7 +1793,7 @@ func TestUnrecognisedIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Close()
-	m := newModel(ctx, store, nil)
+	m := newModel(ctx, store)
 	m.now = func() time.Time { return fixed }
 	if err := m.reload(); err != nil {
 		t.Fatal(err)
@@ -1849,7 +1820,7 @@ func TestUnrecognisedIssue(t *testing.T) {
 }
 
 func TestSubtaskForms(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	ctx := context.Background()
 	press(m, "s") // on a project: refused
 	if m.mode != modeBrowse || !strings.Contains(m.status, "select a task") {
@@ -1879,76 +1850,45 @@ func TestSubtaskForms(t *testing.T) {
 	}
 }
 
-func TestProjectFormWithGoalPicks(t *testing.T) {
-	m, store := setup(t, goaltrackerDB(t))
+func TestProjectForm(t *testing.T) {
+	m, store := setup(t)
 	ctx := context.Background()
 	press(m, "A")
-	if m.mode != modeForm {
-		t.Fatal("A did not open the form")
-	}
-	pf, ok := m.form.(*projectForm)
-	if !ok || !pf.pickList {
-		t.Fatalf("form = %T, pickList=%v", m.form, ok && pf.pickList)
+	if _, ok := m.form.(*projectForm); m.mode != modeForm || !ok {
+		t.Fatalf("A: mode=%v form=%T", m.mode, m.form)
 	}
 	typeText(m, "garden")
 	press(m, "enter") // name -> about
 	typeText(m, "the back")
 	press(m, "ctrl+j")
 	typeText(m, "and the front")
-	press(m, "enter")           // about -> goals
-	press(m, "j", "x", "enter") // pick the second goal (#5), submit
+	press(m, "enter") // about -> submit: no areas, so no area field, and no state when adding
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("project form: mode=%v err=%v", m.mode, m.err)
 	}
 	projects, _ := store.ListProjects(ctx, task.ProjectFilter{})
 	p := projects[len(projects)-1]
-	if p.Name != "garden" || p.Description != "the back\nand the front" || !reflect.DeepEqual(p.GoalIDs, []int64{3}) {
+	if p.Name != "garden" || p.Description != "the back\nand the front" || p.State != task.Active {
 		t.Errorf("saved project: %+v", p)
 	}
 	if r, _ := m.selected(); r.target() != (target{rowProject, p.ID}) {
 		t.Errorf("cursor: %v", r.target())
 	}
-	if !strings.Contains(plain(m), "#3 finish the garden") {
-		t.Error("new project's goal label not shown")
-	}
 
-	// Editing shows the state field; shelve it and unpick the goal.
+	// Editing shows the state field; shelve it, and the project leaves
+	// the list, so the cursor lands on the row before it.
 	press(m, "e")
 	press(m, "enter", "enter")  // name, about
-	press(m, "j", "j", "enter") // state: active -> shelved
-	press(m, "j", "x", "enter") // goals: unpick #3
+	press(m, "j", "j", "enter") // state: active -> shelved, submit
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("edit form: mode=%v err=%v", m.mode, m.err)
 	}
 	p, _ = store.GetProject(ctx, p.ID)
-	if p.State != task.Shelved || p.GoalIDs != nil {
+	if p.State != task.Shelved || p.Description != "the back\nand the front" {
 		t.Errorf("edited project: %+v", p)
 	}
-}
-
-func TestProjectFormWithTypedGoals(t *testing.T) {
-	m, store := setup(t, nil)
-	press(m, "e") // house
-	pf, ok := m.form.(*projectForm)
-	if !ok || pf.pickList || pf.goalText != "3" {
-		t.Fatalf("form = %T, pickList=%v, goalText=%q", m.form, ok && pf.pickList, pf.goalText)
-	}
-	press(m, "enter", "enter", "enter") // name, about, state
-	typeText(m, ", 9, bad")
-	press(m, "enter") // rejected by validation
-	if m.mode != modeForm {
-		t.Fatal("bad goal id accepted")
-	}
-	for range 5 {
-		press(m, "backspace")
-	}
-	press(m, "enter")
-	if m.mode != modeBrowse || m.err != nil {
-		t.Fatalf("form: mode=%v err=%v", m.mode, m.err)
-	}
-	p, _ := store.GetProject(context.Background(), 1)
-	if !reflect.DeepEqual(p.GoalIDs, []int64{3, 9}) {
-		t.Errorf("goal ids: %v", p.GoalIDs)
+	if r, _ := m.selected(); r.target() != (target{rowTask, 3}) {
+		t.Errorf("cursor after shelving: %v, rows %v", r.target(), labels(m))
 	}
 }
 
@@ -1974,7 +1914,7 @@ func TestFit(t *testing.T) {
 }
 
 func TestNarrowTerminalDoesNotOverflow(t *testing.T) {
-	m, _ := setup(t, nil)
+	m, _ := setup(t)
 	m.Update(tea.WindowSizeMsg{Width: 40, Height: 12})
 	view := plain(m)
 	if h := lipgloss.Height(view); h > 12 {
@@ -2022,7 +1962,7 @@ func withAreas(t *testing.T, m *model, store *task.Store) (home, garden int64) {
 }
 
 func TestAreaRows(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	withAreas(t, m, store)
 	want := []string{"A:home", "A:garden", "P:house", "T:paint the hall", "S:buy paint", "S:move furniture", "T:fix the gate", "P:work", "T:email accountant"}
 	if got := labels(m); !reflect.DeepEqual(got, want) {
@@ -2057,7 +1997,7 @@ func TestAreaRows(t *testing.T) {
 }
 
 func TestCollapse(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	ctx := context.Background()
 	press(m, "left") // fold house
 	want := []string{"P:house", "P:work", "T:email accountant"}
@@ -2223,7 +2163,7 @@ func TestCollapse(t *testing.T) {
 }
 
 func TestFoldArea(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	ctx := context.Background()
 	home, garden := withAreas(t, m, store)
 	press(m, "j", "left") // fold garden: house and its tasks go
@@ -2252,7 +2192,7 @@ func TestFoldArea(t *testing.T) {
 	// Adding a project inside a folded area shows the area's contents.
 	press(m, "j", "A") // on garden
 	typeText(m, "grant")
-	press(m, "enter", "enter", "enter", "enter") // name, about, area (garden kept), goals -> submit
+	press(m, "enter", "enter", "enter") // name, about, area (garden kept) -> submit
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("project form: mode=%v err=%v", m.mode, m.err)
 	}
@@ -2293,7 +2233,7 @@ func TestFoldArea(t *testing.T) {
 }
 
 func TestAreaForms(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	ctx := context.Background()
 	home, garden := withAreas(t, m, store)
 	press(m, "j", "n") // on garden: a new area inside it
@@ -2351,7 +2291,7 @@ func TestAreaForms(t *testing.T) {
 		t.Fatalf("project form = %T area=%d", m.form, pf.area)
 	}
 	typeText(m, "docs")
-	press(m, "enter", "enter", "enter", "enter") // name, about, area, goals -> submit
+	press(m, "enter", "enter", "enter") // name, about, area -> submit
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("project form: mode=%v err=%v", m.mode, m.err)
 	}
@@ -2364,7 +2304,7 @@ func TestAreaForms(t *testing.T) {
 	press(m, "e")
 	press(m, "enter", "enter") // name, about
 	press(m, "g", "enter")     // area: (none)
-	press(m, "enter", "enter") // state, goals
+	press(m, "enter")          // state -> submit
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("project edit: mode=%v err=%v", m.mode, m.err)
 	}
@@ -2374,7 +2314,7 @@ func TestAreaForms(t *testing.T) {
 }
 
 func TestDeleteArea(t *testing.T) {
-	m, store := setup(t, nil)
+	m, store := setup(t)
 	ctx := context.Background()
 	home, garden := withAreas(t, m, store)
 	press(m, "j", "d")
@@ -2397,7 +2337,7 @@ func TestDeleteArea(t *testing.T) {
 }
 
 func TestNewerReleaseInTitleLine(t *testing.T) {
-	m, _ := setup(t, nil)
+	m, _ := setup(t)
 	if awaitNewer(nil) != nil {
 		t.Error("a command to wait for a check that does not exist")
 	}

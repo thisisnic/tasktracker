@@ -75,7 +75,6 @@ class Fake {
         if (this.hold) await new Promise<void>((r) => this.held.push(r));
         return { version: this.v(), outline: this.listed(all) };
       },
-      goals: async () => ({ readable: false, goals: [] }),
       projects: async () => {
         const out: Project[] = [];
         eachProject(this.data, (p) => {
@@ -94,10 +93,10 @@ class Fake {
         return { id, name: "x", created_at: "" };
       },
       deleteArea: notImplemented,
-      addProject: async (name: string, description: string, area_id: number, goal_ids: number[]) => {
-        this.calls.push(`addProject ${JSON.stringify({ name, description, area_id, goal_ids })}`);
+      addProject: async (name: string, description: string, area_id: number) => {
+        this.calls.push(`addProject ${JSON.stringify({ name, description, area_id })}`);
         this.writes++;
-        return { id: 9, name, description, state: "active" as const, area_id, goal_ids, created_at: "" };
+        return { id: 9, name, description, state: "active" as const, area_id, created_at: "" };
       },
       editProject: async (id: number, patch: object) => {
         this.calls.push(`editProject ${id} ${JSON.stringify(patch)}`);
@@ -871,24 +870,24 @@ describe("saving a form", () => {
     expect(app.status).toBe("saved task #9");
   });
 
-  it("sends only the project fields that changed, goals compared as a set", async () => {
+  it("sends only the project fields that changed", async () => {
     const { app, fake } = await open();
     selectKey(app, "project:1");
     app.edit();
     const m = app.modal;
     if (m?.kind !== "project") throw new Error(`modal is ${m?.kind}`);
-    await app.saveProject(m, { name: "house", description: "", areaId: 1, goals: [3], state: "active" });
+    await app.saveProject(m, { name: "house", description: "", areaId: 1, state: "active" });
     expect(fake.calls).toEqual([]);
-    await app.saveProject(m, { name: "house", description: "fix it up", areaId: 0, goals: [7, 3], state: "shelved" });
-    expect(fake.calls).toEqual(['editProject 1 {"description":"fix it up","area_id":0,"goal_ids":[7,3],"state":"shelved"}']);
+    await app.saveProject(m, { name: "house", description: "fix it up", areaId: 0, state: "shelved" });
+    expect(fake.calls).toEqual(['editProject 1 {"description":"fix it up","area_id":0,"state":"shelved"}']);
     expect(app.status).toBe("saved project #1");
     app.newProject();
     const n = app.modal;
     if (n?.kind !== "project") throw new Error(`modal is ${n?.kind}`);
     // The saved project is selected, so a new one goes in its area.
     expect(n.areaId).toBe(1);
-    await app.saveProject(n, { name: "garage", description: "", areaId: 2, goals: [], state: "active" });
-    expect(fake.calls[1]).toBe('addProject {"name":"garage","description":"","area_id":2,"goal_ids":[]}');
+    await app.saveProject(n, { name: "garage", description: "", areaId: 2, state: "active" });
+    expect(fake.calls[1]).toBe('addProject {"name":"garage","description":"","area_id":2}');
     expect(app.status).toBe("saved project #9");
   });
 

@@ -35,11 +35,6 @@ CREATE TABLE IF NOT EXISTS projects (
 	area_id     INTEGER REFERENCES areas(id) ON DELETE SET NULL,
 	created_at  TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS project_goals (
-	project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-	goal_id    INTEGER NOT NULL,
-	PRIMARY KEY (project_id, goal_id)
-);
 CREATE TABLE IF NOT EXISTS tasks (
 	id         INTEGER PRIMARY KEY,
 	project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -298,7 +293,6 @@ type NewProject struct {
 	Name        string
 	Description string
 	AreaID      int64 // 0 for no area
-	GoalIDs     []int64
 }
 
 // AddProject validates and inserts a project.
@@ -307,25 +301,15 @@ func (s *Store) AddProject(ctx context.Context, in NewProject) (Project, error) 
 	if in.Name == "" {
 		return Project{}, invalid("name is required")
 	}
-	goals, err := NormaliseGoalIDs(in.GoalIDs)
-	if err != nil {
-		return Project{}, err
-	}
 	if err := s.checkArea(ctx, in.AreaID); err != nil {
 		return Project{}, err
 	}
-	var id int64
-	err = s.tx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `INSERT INTO projects (name, description, state, area_id, created_at) VALUES (?, ?, ?, ?, ?)`,
-			in.Name, strings.TrimSpace(in.Description), string(Active), nullID(in.AreaID), now())
-		if err != nil {
-			return err
-		}
-		if id, err = res.LastInsertId(); err != nil {
-			return err
-		}
-		return setGoals(ctx, tx, id, goals)
-	})
+	res, err := s.db.ExecContext(ctx, `INSERT INTO projects (name, description, state, area_id, created_at) VALUES (?, ?, ?, ?, ?)`,
+		in.Name, strings.TrimSpace(in.Description), string(Active), nullID(in.AreaID), now())
+	if err != nil {
+		return Project{}, err
+	}
+	id, err := res.LastInsertId()
 	if err != nil {
 		return Project{}, err
 	}
@@ -344,18 +328,6 @@ func (s *Store) checkArea(ctx context.Context, id int64) error {
 	return nil
 }
 
-func setGoals(ctx context.Context, tx *sql.Tx, projectID int64, goals []int64) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM project_goals WHERE project_id = ?`, projectID); err != nil {
-		return err
-	}
-	for _, g := range goals {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO project_goals (project_id, goal_id) VALUES (?, ?)`, projectID, g); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 const selectProject = `SELECT id, name, description, state, area_id, created_at FROM projects`
 
 func scanProject(row interface{ Scan(...any) error }) (Project, error) {
@@ -370,51 +342,13 @@ func scanProject(row interface{ Scan(...any) error }) (Project, error) {
 	return p, nil
 }
 
-// GetProject returns one project by id, with its goal ids.
+// GetProject returns one project by id.
 func (s *Store) GetProject(ctx context.Context, id int64) (Project, error) {
 	p, err := scanProject(s.db.QueryRowContext(ctx, selectProject+" WHERE id = ?", id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Project{}, ErrNotFound
 	}
-	if err != nil {
-		return Project{}, err
-	}
-	p.GoalIDs, err = s.goalsFor(ctx, id)
 	return p, err
-}
-
-func (s *Store) goalsFor(ctx context.Context, projectID int64) ([]int64, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT goal_id FROM project_goals WHERE project_id = ? ORDER BY goal_id`, projectID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []int64
-	for rows.Next() {
-		var g int64
-		if err := rows.Scan(&g); err != nil {
-			return nil, err
-		}
-		out = append(out, g)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) goalsByProject(ctx context.Context) (map[int64][]int64, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT project_id, goal_id FROM project_goals ORDER BY project_id, goal_id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[int64][]int64{}
-	for rows.Next() {
-		var p, g int64
-		if err := rows.Scan(&p, &g); err != nil {
-			return nil, err
-		}
-		out[p] = append(out[p], g)
-	}
-	return out, rows.Err()
 }
 
 // ProjectFilter narrows ListProjects. The zero value lists active projects
@@ -452,17 +386,7 @@ func (s *Store) ListProjects(ctx context.Context, f ProjectFilter) ([]Project, e
 		}
 		out = append(out, p)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	goals, err := s.goalsByProject(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for i := range out {
-		out[i].GoalIDs = goals[out[i].ID]
-	}
-	return out, nil
+	return out, rows.Err()
 }
 
 // ProjectEdit holds optional changes; nil fields are left alone.
@@ -470,8 +394,7 @@ type ProjectEdit struct {
 	Name        *string
 	Description *string
 	State       *State
-	AreaID      *int64   // 0 moves the project out of any area
-	GoalIDs     *[]int64 // empty slice clears the links
+	AreaID      *int64 // 0 moves the project out of any area
 }
 
 // UpdateProject applies a ProjectEdit.
@@ -502,22 +425,7 @@ func (s *Store) UpdateProject(ctx context.Context, id int64, e ProjectEdit) (Pro
 		}
 		p.AreaID = *e.AreaID
 	}
-	if e.GoalIDs != nil {
-		p.GoalIDs, err = NormaliseGoalIDs(*e.GoalIDs)
-		if err != nil {
-			return Project{}, err
-		}
-	}
-	err = s.tx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `UPDATE projects SET name = ?, description = ?, state = ?, area_id = ? WHERE id = ?`, p.Name, p.Description, string(p.State), nullID(p.AreaID), id); err != nil {
-			return err
-		}
-		if e.GoalIDs != nil {
-			return setGoals(ctx, tx, id, p.GoalIDs)
-		}
-		return nil
-	})
-	if err != nil {
+	if _, err := s.db.ExecContext(ctx, `UPDATE projects SET name = ?, description = ?, state = ?, area_id = ? WHERE id = ?`, p.Name, p.Description, string(p.State), nullID(p.AreaID), id); err != nil {
 		return Project{}, err
 	}
 	return s.GetProject(ctx, id)

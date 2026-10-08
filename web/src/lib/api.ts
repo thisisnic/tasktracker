@@ -18,7 +18,6 @@ export interface Project {
   description?: string;
   state: State;
   area_id?: number;
-  goal_ids?: number[];
   created_at: string;
 }
 
@@ -73,17 +72,6 @@ export interface Meta {
   version: string;
 }
 
-export interface Goal {
-  id: number;
-  statement?: string;
-  period?: string;
-}
-
-export interface Goals {
-  readable: boolean;
-  goals: Goal[];
-}
-
 /** The fields of a task an edit or a copy may change. A missing field
  * is left alone; an empty due, issue or notes clears it. */
 export interface TaskEdit {
@@ -105,7 +93,6 @@ export interface ProjectEdit {
   description?: string;
   state?: State;
   area_id?: number;
-  goal_ids?: number[];
 }
 
 export class ApiError extends Error {
@@ -148,14 +135,13 @@ export const api = {
   version: () => call<{ version: string }>("GET", "/api/version"),
   outline: (all: boolean) => call<OutlineResponse>("GET", `/api/outline${all ? "?all=1" : ""}`),
   projects: () => call<Project[]>("GET", "/api/projects"),
-  goals: () => call<Goals>("GET", "/api/goals"),
 
   addArea: (name: string, parent_id: number) => call<Area>("POST", "/api/areas", { name, parent_id }),
   editArea: (id: number, patch: AreaEdit) => call<Area>("PATCH", `/api/areas/${id}`, patch),
   deleteArea: (id: number) => call<void>("DELETE", `/api/areas/${id}`),
 
-  addProject: (name: string, description: string, area_id: number, goal_ids: number[]) =>
-    call<Project>("POST", "/api/projects", { name, description, area_id, goal_ids }),
+  addProject: (name: string, description: string, area_id: number) =>
+    call<Project>("POST", "/api/projects", { name, description, area_id }),
   editProject: (id: number, patch: ProjectEdit) => call<Project>("PATCH", `/api/projects/${id}`, patch),
   deleteProject: (id: number) => call<void>("DELETE", `/api/projects/${id}`),
 

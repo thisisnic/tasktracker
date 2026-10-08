@@ -3,7 +3,7 @@
 //
 // The hierarchy is project > task > subtask, with areas above projects for
 // grouping: an area holds projects and other areas. A project has a name, a
-// description, an end state and zero or more links to goals in goaltracker.
+// description and an end state.
 // A task has a title, a status, an optional due date, an optional link to
 // a GitHub issue and a block of notes. A subtask is a checklist item: a
 // title and a tick.
@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -88,8 +87,7 @@ type Project struct {
 	Name        string    `json:"name"`
 	Description string    `json:"description,omitempty"`
 	State       State     `json:"state"`
-	AreaID      int64     `json:"area_id,omitempty"`  // the area the project is in; 0 for none
-	GoalIDs     []int64   `json:"goal_ids,omitempty"` // goaltracker goal ids this project serves
+	AreaID      int64     `json:"area_id,omitempty"` // the area the project is in; 0 for none
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -291,24 +289,6 @@ func (s Status) Next() Status {
 		return Finished
 	}
 	return Todo
-}
-
-// NormaliseGoalIDs sorts goal ids, drops duplicates, and rejects ids that
-// are not positive.
-func NormaliseGoalIDs(ids []int64) ([]int64, error) {
-	seen := map[int64]bool{}
-	var out []int64
-	for _, id := range ids {
-		if id <= 0 {
-			return nil, invalid("goal id %d: want a positive integer", id)
-		}
-		if !seen[id] {
-			seen[id] = true
-			out = append(out, id)
-		}
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
-	return out, nil
 }
 
 // ProjectNode is a project with its tasks, for the tree view.

@@ -2,7 +2,6 @@ package task
 
 import (
 	"errors"
-	"reflect"
 	"testing"
 	"time"
 )
@@ -164,21 +163,6 @@ func TestStatusNext(t *testing.T) {
 	}
 }
 
-func TestNormaliseGoalIDs(t *testing.T) {
-	got, err := NormaliseGoalIDs([]int64{3, 1, 3, 2, 1})
-	if err != nil || !reflect.DeepEqual(got, []int64{1, 2, 3}) {
-		t.Errorf("NormaliseGoalIDs = %v, %v", got, err)
-	}
-	if got, err := NormaliseGoalIDs(nil); err != nil || got != nil {
-		t.Errorf("nil in should give nil out: %v, %v", got, err)
-	}
-	for _, bad := range [][]int64{{0}, {1, -2}} {
-		if _, err := NormaliseGoalIDs(bad); err == nil {
-			t.Errorf("NormaliseGoalIDs(%v) accepted", bad)
-		}
-	}
-}
-
 func TestNodeCounts(t *testing.T) {
 	p := ProjectNode{Tasks: []TaskNode{
 		{Task: Task{Status: Todo}, Subtasks: []Subtask{{Done: true}, {Done: false}, {Done: true}}},
@@ -212,9 +196,6 @@ func TestInvalidErrors(t *testing.T) {
 	}
 	if _, err := ParseStatus("maybe"); !errors.Is(err, ErrInvalid) {
 		t.Errorf("ParseStatus: %v", err)
-	}
-	if _, err := NormaliseGoalIDs([]int64{0}); !errors.Is(err, ErrInvalid) {
-		t.Errorf("NormaliseGoalIDs: %v", err)
 	}
 	if errors.Is(ErrNotFound, ErrInvalid) {
 		t.Error("ErrNotFound matches ErrInvalid")

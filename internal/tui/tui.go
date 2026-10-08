@@ -21,15 +21,11 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/thisisnic/tasktracker/internal/goallink"
 	"github.com/thisisnic/tasktracker/internal/task"
 )
 
 // Options adjust how the TUI starts.
 type Options struct {
-	// Goals looks up the statements of goals a project links to. Nil means
-	// goal ids are shown bare.
-	Goals *goallink.Reader
 	// ShowFinished starts with archived tasks and finished projects
 	// visible.
 	ShowFinished bool
@@ -47,7 +43,7 @@ type Options struct {
 // or by another process it saw, which is what decides whether a backup
 // on quit is worth taking.
 func Run(ctx context.Context, store *task.Store, opts Options) (changed bool, err error) {
-	m := newModel(ctx, store, opts.Goals)
+	m := newModel(ctx, store)
 	m.showAll = opts.ShowFinished
 	m.foldsPath = opts.Folds
 	m.newerCheck = opts.Newer
@@ -235,7 +231,6 @@ type editor interface {
 type model struct {
 	ctx   context.Context
 	store *task.Store
-	goals *goallink.Reader
 	now   func() time.Time
 
 	outline    task.Outline
@@ -265,10 +260,6 @@ type model struct {
 	newerCheck func() string // waits for the release check, when there is one
 	newer      string        // a release newer than this build, for the title line
 
-	// goal labels for the selected project, looked up once per project id
-	goalLabels map[int64][]goallink.Goal
-	goalErr    error
-
 	mode    mode
 	form    editor
 	status  string
@@ -276,8 +267,8 @@ type model struct {
 	pollErr bool // err came from a poll, so a poll that goes well clears it
 }
 
-func newModel(ctx context.Context, store *task.Store, goals *goallink.Reader) *model {
-	return &model{ctx: ctx, store: store, goals: goals, now: time.Now, width: 100, height: 30, goalLabels: map[int64][]goallink.Goal{}, collapsed: map[target]bool{}, foldMade: map[target]string{}}
+func newModel(ctx context.Context, store *task.Store) *model {
+	return &model{ctx: ctx, store: store, now: time.Now, width: 100, height: 30, collapsed: map[target]bool{}, foldMade: map[target]string{}}
 }
 
 // afterWrite is reload for after a store write: it also notes that the
@@ -606,29 +597,6 @@ func (m *model) selected() (row, bool) {
 	return m.rows[m.cursor], true
 }
 
-// projectGoals returns the labelled goals for a project, looking them up
-// the first time. Without a reader, or when goaltracker's database cannot
-// be read, the labels are bare ids.
-func (m *model) projectGoals(p task.Project) []goallink.Goal {
-	if g, ok := m.goalLabels[p.ID]; ok {
-		return g
-	}
-	var goals []goallink.Goal
-	if m.goals == nil {
-		for _, id := range p.GoalIDs {
-			goals = append(goals, goallink.Goal{ID: id})
-		}
-	} else {
-		var err error
-		goals, err = m.goals.Lookup(m.ctx, p.GoalIDs)
-		if err != nil {
-			m.goalErr = err
-		}
-	}
-	m.goalLabels[p.ID] = goals
-	return goals
-}
-
 func (m *model) Init() tea.Cmd { return tea.Batch(poll(), awaitNewer(m.newerCheck)) }
 
 // Update handles a message, then notes on the status line any change
@@ -716,11 +684,8 @@ func (m *model) poll() {
 }
 
 // refresh is the reload behind r and poll: everything is read again,
-// goal labels included, since another process may have changed any of
-// it.
+// since another process may have changed any of it.
 func (m *model) refresh() error {
-	m.goalLabels = map[int64][]goallink.Goal{}
-	m.goalErr = nil
 	return m.reload()
 }
 
@@ -776,8 +741,6 @@ func (m *model) updateForm(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	form := m.form
 	m.form = nil
-	// A project's goal links may have changed; look them up afresh.
-	delete(m.goalLabels, t.id)
 	if err := m.afterWrite(); err != nil {
 		m.err = err
 		return m, nil
@@ -875,7 +838,7 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "n":
 		return m, m.openEditor(newAreaForm(nil, m.areaHere(), m.areas, nil, 0, 0))
 	case "A":
-		return m, m.openEditor(newProjectForm(nil, m.areaHere(), m.areas, m.goalOptions(), 0, 0))
+		return m, m.openEditor(newProjectForm(nil, m.areaHere(), m.areas, 0, 0))
 	case "a":
 		r, ok := m.selected()
 		if !ok {
@@ -923,7 +886,7 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, m.openEditor(newAreaForm(&a, a.ParentID, m.areas, inside(r.area), 0, 0))
 		case rowProject:
 			p := r.project.Project
-			return m, m.openEditor(newProjectForm(&p, p.AreaID, m.areas, m.goalOptions(), 0, 0))
+			return m, m.openEditor(newProjectForm(&p, p.AreaID, m.areas, 0, 0))
 		case rowTask:
 			t := r.task.Task
 			return m, m.openEditor(newTaskForm(&t, t.ProjectID, m.projectOptions(), m.now(), 0, 0))
@@ -1706,15 +1669,6 @@ func (m *model) viewDetail(w int) string {
 		if p.Description != "" {
 			lines = append(lines, "", labelStyle.Render("about"))
 			lines = append(lines, strings.Split(wrap.Render(p.Description), "\n")...)
-		}
-		if goals := m.projectGoals(p); len(goals) > 0 {
-			lines = append(lines, "", labelStyle.Render("goals"))
-			for _, g := range goals {
-				lines = append(lines, cut("  "+g.Label()))
-			}
-			if m.goalErr != nil {
-				lines = append(lines, cut(dimStyle.Render("  (goaltracker not readable)")))
-			}
 		}
 	case rowTask:
 		t := r.task.Task

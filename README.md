@@ -8,10 +8,9 @@
 **[Releases](https://github.com/thisisnic/tasktracker/releases)** | **[Quick Start](#quick-start)** | **[Backups](#backups)**
 
 A personal task tracker that keeps your data on your machine. Projects
-hold tasks, tasks hold checklists, and a project can point at the goals it
-serves in [goaltracker](https://github.com/thisisnic/goaltracker). One
-binary serves a browser UI on a loopback port, opens as a terminal UI, and
-is a CLI with `--json` everywhere. One SQLite file, no account.
+hold tasks, tasks hold checklists. One binary serves a browser UI on a
+loopback port, opens as a terminal UI, and is a CLI with `--json`
+everywhere. One SQLite file, no account.
 
 ```text
 tasktracker · by project
@@ -30,8 +29,7 @@ n area · A project · a task · s subtask · c copy task · e edit · space nex
 
 ## How It Works
 
-1. Make a project. Give it a description and, if you like, the ids of the
-   goaltracker goals it serves.
+1. Make a project, with a description if you like.
 2. Add tasks to it. A task has a title, a status (`todo`, `done` or
    `dropped`), an optional due date, an optional link to a GitHub
    issue, and notes: a block of free text for whatever is worth keeping
@@ -92,7 +90,7 @@ coding agents:
 ```bash
 tasktracker area add "home"
 tasktracker area add "garden" --in 1
-tasktracker project add "house" --description "fix it up" --goal 3
+tasktracker project add "house" --description "fix it up"
 tasktracker project add "grant report" --in 2
 tasktracker task add "paint the hall" --project 1 --due 2026-10-01
 tasktracker subtask add 1 "buy paint"
@@ -141,10 +139,6 @@ tasktracker task list --due --json
   work that looks like something already listed. Change what differs
   and save; the copy starts as todo with the original's notes and its
   checklist, unticked.
-- **Goal links** - A project stores the ids of the goaltracker goals it
-  serves. tasktracker reads goaltracker's database read-only to show their
-  statements, and offers them as a pick list in the project form. Without
-  that database the ids are shown bare and nothing else changes.
 - **Encrypted backups** - One age-encrypted file, written to a folder you
   choose, and optionally committed and pushed to your own private git repo
   when the UI exits after changing something.
@@ -167,19 +161,6 @@ tasktracker task list --due --json
   Once a day tasktracker asks GitHub what the latest release is; while a
   newer one is out, every command says so and the UI's title line shows it.
 
-## Goal Links
-
-goaltracker's goals have numeric ids. Give a project those ids with
-`--goal` (repeatable) or pick them in the project form, and tasktracker
-looks the statements up in goaltracker's database, which it never writes
-to. It looks in `$GOALTRACKER_DB`, then goaltracker's default location. If
-yours is somewhere else, say so in the config:
-
-```toml
-[goaltracker]
-db = "~/somewhere/goaltracker.db"
-```
-
 ## Configuration
 
 Everything in `~/.config/tasktracker/config.toml` is optional:
@@ -189,7 +170,6 @@ Everything in `~/.config/tasktracker/config.toml` is optional:
 port = 7344
 
 [backup]        # see Backups
-[goaltracker]   # see Goal Links
 ```
 
 ## Backups
@@ -289,10 +269,10 @@ wrong.
 | `tasktracker area list` | Areas as a tree with project counts; `--json` |
 | `tasktracker area edit ID` | Rename or move an area; `--name`, `--in`, `--top` |
 | `tasktracker area delete ID` | Delete an area; what is in it moves up a level; `--yes` |
-| `tasktracker project add NAME` | Add a project; `--description`, `--in` (area), `--goal` (repeatable), `--json` |
+| `tasktracker project add NAME` | Add a project; `--description`, `--in` (area), `--json` |
 | `tasktracker project list` | List active projects; `--all`, `--state`, `--json` |
-| `tasktracker project show ID` | One project with its goals and tasks; `--json` |
-| `tasktracker project edit ID` | Change name, description, area or goals; `--in` / `--top` move it, `--goal` replaces the set, `--no-goals` clears it |
+| `tasktracker project show ID` | One project with its tasks; `--json` |
+| `tasktracker project edit ID` | Change name, description or area; `--in` / `--top` move it |
 | `tasktracker project mark ID active\|done\|shelved` | Set a project's state |
 | `tasktracker project delete ID` | Delete a project with all its tasks; `--yes` |
 | `tasktracker task add TITLE --project ID` | Add a task; `--due`, `--issue`, `--notes`, `--json` |

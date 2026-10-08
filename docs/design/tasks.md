@@ -6,9 +6,9 @@ Open questions rather than decided.
 
 ## Context
 
-goaltracker holds goals for the year, quarter and month. tasktracker is the
-day-to-day work: loosely modelled on an issue tracker, without most of its
-parts. It is a separate binary with its own database, built the same way.
+tasktracker is the day-to-day work: loosely modelled on an issue tracker,
+without most of its parts. One binary with its own database, built the
+same way as its siblings.
 
 ## Hierarchy
 
@@ -37,8 +37,6 @@ placing things.
   finished.
 - Deleting an area is like removing a tag: what was in it moves up a
   level. Nothing in it is deleted.
-- Goal links stay on projects for now. To be revisited if a whole area
-  turns out to serve one goal.
 
 ### Folding
 
@@ -79,8 +77,6 @@ and the other UI's folds from that session are lost.
 - A project has a name and a description.
 - Projects have end states: `active`, `done` and `shelved`. The names can
   change if they do not fit.
-- A project can link to goals in goaltracker, and can serve several, so
-  the link is zero or more goals per project.
 
 ## Tasks
 
@@ -171,17 +167,11 @@ archived on purpose.
 - Ticking every subtask does **not** finish the task. The task is marked
   done by hand.
 
-## Linking to goals
+## Goal links, removed
 
-Loose coupling: a project stores the goaltracker goal ids it serves. When
-a project is shown, tasktracker reads goaltracker's database read-only to
-put the goal's statement next to the id. If that database cannot be read,
-only the ids are shown. Nothing in goaltracker changes.
-
-goaltracker never renumbers an existing goal. The one gap is that SQLite
-may reuse the id of the most recently deleted goal for the next new one.
-Making the goals table `AUTOINCREMENT` closes that gap; it is a one-line
-change in goaltracker, left as a follow-up there.
+Projects used to carry goaltracker goal ids and read goaltracker's
+database for their statements. The link was dropped: tasktracker stands
+alone. An old database keeps its `project_goals` table, unread.
 
 ## Showing tasks
 
@@ -351,10 +341,6 @@ which went this way first, so the two feel the same.
   both start again when it is restarted, and a page left open across
   the restart would else miss what was written while it was down. A
   page still reloads after its own writes without waiting for the poll.
-- goaltracker is read on request, not at start. `/api/goals` lists what
-  it holds and says whether it could be read, so the page offers a pick
-  list when it can and typed ids when it cannot, as the terminal UI's
-  form does, and shows the ids bare in the detail when it cannot.
 - The page shares the terminal UI's behaviour, not its looks. The rows
   come in the same order, the keys do the same things, the status line
   says the same words, and the rules for where the selection lands

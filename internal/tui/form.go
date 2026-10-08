@@ -3,14 +3,12 @@ package tui
 import (
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/huh/v2"
 
-	"github.com/thisisnic/tasktracker/internal/goallink"
 	"github.com/thisisnic/tasktracker/internal/task"
 )
 
@@ -138,9 +136,8 @@ func (f *areaForm) apply(m *model) (target, error) {
 
 // ---- project ----
 
-// projectForm adds or edits a project. Goals come from goaltracker as a
-// pick list when its database can be read, and as a typed list of ids
-// otherwise. The area field is only shown once there are areas.
+// projectForm adds or edits a project. The area field is only shown
+// once there are areas.
 type projectForm struct {
 	huhForm
 	editID int64 // 0 when adding
@@ -149,34 +146,16 @@ type projectForm struct {
 	description string
 	area        int64 // 0 for none
 	state       task.State
-	goalPicks   []int64 // when a pick list is offered
-	goalText    string  // otherwise: comma-separated ids
-	pickList    bool
 }
 
-// goalOptions lists goaltracker's goals for the project form, or nil when
-// they cannot be read, in which case the form takes typed ids.
-func (m *model) goalOptions() []goallink.Goal {
-	if m.goals == nil {
-		return nil
-	}
-	goals, err := m.goals.All(m.ctx)
-	if err != nil {
-		return nil
-	}
-	return goals
-}
-
-func newProjectForm(existing *task.Project, areaID int64, areas []task.Area, goals []goallink.Goal, width, height int) *projectForm {
-	f := &projectForm{area: areaID, state: task.Active, pickList: len(goals) > 0}
+func newProjectForm(existing *task.Project, areaID int64, areas []task.Area, width, height int) *projectForm {
+	f := &projectForm{area: areaID, state: task.Active}
 	if existing != nil {
 		f.editID = existing.ID
 		f.name = existing.Name
 		f.description = existing.Description
 		f.area = existing.AreaID
 		f.state = existing.State
-		f.goalPicks = append([]int64{}, existing.GoalIDs...)
-		f.goalText = idsText(existing.GoalIDs)
 	}
 	title := "New project"
 	if existing != nil {
@@ -198,70 +177,21 @@ func newProjectForm(existing *task.Project, areaID int64, areas []task.Area, goa
 			huh.NewOption("shelved", task.Shelved),
 		).Value(&f.state))
 	}
-	if f.pickList {
-		// Goals linked to ids that goaltracker no longer has would be lost
-		// on save, so keep them as options too.
-		known := map[int64]bool{}
-		var opts []huh.Option[int64]
-		for _, g := range goals {
-			known[g.ID] = true
-			opts = append(opts, huh.NewOption(g.Period+"  "+g.Label(), g.ID))
-		}
-		for _, id := range f.goalPicks {
-			if !known[id] {
-				opts = append(opts, huh.NewOption(fmt.Sprintf("#%d (not in goaltracker)", id), id))
-			}
-		}
-		fields = append(fields, huh.NewMultiSelect[int64]().Title("Goals").Description("goaltracker goals this project serves; x to pick").
-			Options(opts...).Value(&f.goalPicks).Height(8))
-	} else {
-		fields = append(fields, huh.NewInput().Title("Goals").Description("goaltracker goal ids, comma-separated; blank for none").
-			Value(&f.goalText).Validate(func(s string) error { _, err := parseIDs(s); return err }))
-	}
 	f.form = huh.NewForm(huh.NewGroup(fields...).Title(title)).WithShowHelp(true)
 	f.resize(width, height)
 	return f
 }
 
 func (f *projectForm) help() string {
-	return "enter next · shift+tab back · ctrl+j new line in about · x picks a goal · esc cancel"
-}
-
-func idsText(ids []int64) string {
-	var parts []string
-	for _, id := range ids {
-		parts = append(parts, strconv.FormatInt(id, 10))
-	}
-	return strings.Join(parts, ", ")
-}
-
-// parseIDs reads a comma- or space-separated list of positive integers.
-func parseIDs(s string) ([]int64, error) {
-	var out []int64
-	for _, part := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ' ' }) {
-		part = strings.TrimPrefix(part, "#")
-		id, err := strconv.ParseInt(part, 10, 64)
-		if err != nil || id <= 0 {
-			return nil, fmt.Errorf("%q is not a goal id", part)
-		}
-		out = append(out, id)
-	}
-	return out, nil
+	return "enter next · shift+tab back · ctrl+j new line in about · esc cancel"
 }
 
 func (f *projectForm) apply(m *model) (target, error) {
-	goals := f.goalPicks
-	if !f.pickList {
-		var err error
-		if goals, err = parseIDs(f.goalText); err != nil {
-			return target{}, err
-		}
-	}
 	if f.editID == 0 {
-		p, err := m.store.AddProject(m.ctx, task.NewProject{Name: f.name, Description: f.description, AreaID: f.area, GoalIDs: goals})
+		p, err := m.store.AddProject(m.ctx, task.NewProject{Name: f.name, Description: f.description, AreaID: f.area})
 		return target{rowProject, p.ID}, err
 	}
-	p, err := m.store.UpdateProject(m.ctx, f.editID, task.ProjectEdit{Name: &f.name, Description: &f.description, State: &f.state, AreaID: &f.area, GoalIDs: &goals})
+	p, err := m.store.UpdateProject(m.ctx, f.editID, task.ProjectEdit{Name: &f.name, Description: &f.description, State: &f.state, AreaID: &f.area})
 	return target{rowProject, p.ID}, err
 }
 

@@ -9,11 +9,10 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/thisisnic/tasktracker/internal/goallink"
 	"github.com/thisisnic/tasktracker/internal/task"
 )
 
-func projectCmd(dbPath, cfgPath *string) *cobra.Command {
+func projectCmd(dbPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "project",
 		Short: "Add, list and update projects",
@@ -21,7 +20,7 @@ func projectCmd(dbPath, cfgPath *string) *cobra.Command {
 	cmd.AddCommand(
 		projectAddCmd(dbPath),
 		projectListCmd(dbPath),
-		projectShowCmd(dbPath, cfgPath),
+		projectShowCmd(dbPath),
 		projectEditCmd(dbPath),
 		projectMarkCmd(dbPath),
 		projectDeleteCmd(dbPath),
@@ -35,9 +34,8 @@ func projectAddCmd(dbPath *string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add NAME",
 		Short: "Add a project",
-		Long: `Add a project. --in puts it in an area. Give --goal once per goaltracker
-goal the project serves; the ids are goaltracker's own.`,
-		Example: `  tasktracker project add "house" --description "fix it up" --goal 3 --goal 7
+		Long:  `Add a project. --in puts it in an area.`,
+		Example: `  tasktracker project add "house" --description "fix it up"
   tasktracker project add "grant report" --in 2`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -60,7 +58,6 @@ goal the project serves; the ids are goaltracker's own.`,
 	}
 	cmd.Flags().StringVar(&in.Description, "description", "", "what the project is")
 	cmd.Flags().Int64Var(&in.AreaID, "in", 0, "id of the area the project goes in")
-	cmd.Flags().Int64SliceVar(&in.GoalIDs, "goal", nil, "goaltracker goal id this project serves (repeatable)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print the project as JSON")
 	return cmd
 }
@@ -110,9 +107,9 @@ func projectListCmd(dbPath *string) *cobra.Command {
 				return err
 			}
 			tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-			fmt.Fprintln(tw, "ID\tPROJECT\tAREA\tSTATE\tOPEN\tGOALS")
+			fmt.Fprintln(tw, "ID\tPROJECT\tAREA\tSTATE\tOPEN")
 			for _, p := range projects {
-				fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%d\t%s\n", p.ID, p.Name, task.AreaPath(areas, p.AreaID), p.State, open[p.ID], goalIDsText(p.GoalIDs))
+				fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%d\n", p.ID, p.Name, task.AreaPath(areas, p.AreaID), p.State, open[p.ID])
 			}
 			return tw.Flush()
 		},
@@ -136,26 +133,17 @@ func openCounts(cmd *cobra.Command, store *task.Store) (map[int64]int, error) {
 	return out, nil
 }
 
-func goalIDsText(ids []int64) string {
-	var parts []string
-	for _, id := range ids {
-		parts = append(parts, fmt.Sprintf("#%d", id))
-	}
-	return strings.Join(parts, " ")
-}
-
 type projectDetail struct {
 	task.Project
-	Area  string          `json:"area,omitempty"` // the area's path, such as "home / garden"
-	Goals []goallink.Goal `json:"goals"`
-	Tasks []task.Task     `json:"tasks"`
+	Area  string      `json:"area,omitempty"` // the area's path, such as "home / garden"
+	Tasks []task.Task `json:"tasks"`
 }
 
-func projectShowCmd(dbPath, cfgPath *string) *cobra.Command {
+func projectShowCmd(dbPath *string) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "show ID",
-		Short: "Show a project with its goals and tasks",
+		Short: "Show a project with its tasks",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := parseID("project", args[0])
@@ -183,17 +171,11 @@ func projectShowCmd(dbPath, cfgPath *string) *cobra.Command {
 				}
 				area = task.AreaPath(areas, p.AreaID)
 			}
-			// Goal statements are a nicety: without goaltracker's database
-			// the ids are shown bare and the reason goes to stderr.
-			goals, goalErr := goalReader(cmd, *cfgPath).Lookup(cmd.Context(), p.GoalIDs)
-			if goalErr != nil {
-				fmt.Fprintf(cmd.ErrOrStderr(), "note: goal statements not shown: %v\n", goalErr)
-			}
 			if asJSON {
 				if tasks == nil {
 					tasks = []task.Task{}
 				}
-				return writeJSON(cmd.OutOrStdout(), projectDetail{Project: p, Area: area, Goals: goals, Tasks: tasks})
+				return writeJSON(cmd.OutOrStdout(), projectDetail{Project: p, Area: area, Tasks: tasks})
 			}
 			out := cmd.OutOrStdout()
 			fmt.Fprintf(out, "#%d  %s\n", p.ID, p.Name)
@@ -203,12 +185,6 @@ func projectShowCmd(dbPath, cfgPath *string) *cobra.Command {
 			fmt.Fprintf(out, "state:  %s\n", p.State)
 			if p.Description != "" {
 				fmt.Fprintf(out, "about:  %s\n", p.Description)
-			}
-			if len(goals) > 0 {
-				fmt.Fprintln(out, "goals:")
-				for _, g := range goals {
-					fmt.Fprintf(out, "  %s\n", g.Label())
-				}
 			}
 			if len(tasks) > 0 {
 				fmt.Fprintln(out, "tasks:")
@@ -229,15 +205,11 @@ func projectEditCmd(dbPath *string) *cobra.Command {
 	var name, description string
 	var in int64
 	var top bool
-	var goals []int64
-	var noGoals bool
 	cmd := &cobra.Command{
 		Use:   "edit ID",
-		Short: "Change a project's name, description, area or goals",
-		Long: `Change a project. --in moves it into an area and --top out of any area.
---goal replaces the whole set of goal links, so give it once per goal to
-keep; --no-goals removes them all.`,
-		Args: cobra.ExactArgs(1),
+		Short: "Change a project's name, description or area",
+		Long:  `Change a project. --in moves it into an area and --top out of any area.`,
+		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := parseID("project", args[0])
 			if err != nil {
@@ -259,16 +231,7 @@ keep; --no-goals removes them all.`,
 			case cmd.Flags().Changed("in"):
 				e.AreaID = &in
 			}
-			switch {
-			case noGoals && cmd.Flags().Changed("goal"):
-				return errors.New("--goal and --no-goals cannot both be given")
-			case noGoals:
-				none := []int64{}
-				e.GoalIDs = &none
-			case cmd.Flags().Changed("goal"):
-				e.GoalIDs = &goals
-			}
-			if e.Name == nil && e.Description == nil && e.AreaID == nil && e.GoalIDs == nil {
+			if e.Name == nil && e.Description == nil && e.AreaID == nil {
 				return errors.New("nothing to change; give at least one flag")
 			}
 			store, err := openStore(dbPath)
@@ -288,8 +251,6 @@ keep; --no-goals removes them all.`,
 	cmd.Flags().StringVar(&description, "description", "", "new description; empty clears it")
 	cmd.Flags().Int64Var(&in, "in", 0, "id of the area to move the project into")
 	cmd.Flags().BoolVar(&top, "top", false, "move the project out of any area")
-	cmd.Flags().Int64SliceVar(&goals, "goal", nil, "goaltracker goal id to link (repeatable; replaces the set)")
-	cmd.Flags().BoolVar(&noGoals, "no-goals", false, "remove every goal link")
 	return cmd
 }
 

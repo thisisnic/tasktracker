@@ -21,7 +21,6 @@ holds the design decisions and open questions.
 - `web` — the Svelte 5 page. `src/lib/rows.ts` holds the row building
   and landing rules ported from the TUI; `src/lib/app.svelte.ts` the
   state and every action; `src/components` the panes and forms.
-- `internal/goallink` — read-only reader of a goaltracker database.
 - `internal/backup`, `internal/update`, `internal/version`,
   `internal/config` — shared plumbing, kept in step with goaltracker.
 
@@ -81,8 +80,7 @@ Only ever on a scratch database:
 
 ```bash
 TASKTRACKER_DB=/tmp/scratch/smoke.db XDG_CONFIG_HOME=/tmp/scratch/cfg \
-  XDG_CACHE_HOME=/tmp/scratch/cache GOALTRACKER_DB=/tmp/scratch/absent.db \
-  ./tasktracker
+  XDG_CACHE_HOME=/tmp/scratch/cache ./tasktracker
 ```
 
 Never point the binary at real data while testing.

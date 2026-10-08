@@ -27,7 +27,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/thisisnic/tasktracker/internal/goallink"
 	"github.com/thisisnic/tasktracker/internal/task"
 )
 
@@ -36,17 +35,13 @@ var dist embed.FS
 
 // Options configure a Server.
 type Options struct {
-	Store *task.Store
-	// Goals reads goaltracker's database for the goals a project can
-	// serve. Nil means goaltracker is not consulted.
-	Goals   *goallink.Reader
+	Store   *task.Store
 	Version string
 }
 
 // Server is the API and UI handler.
 type Server struct {
 	store   *task.Store
-	goals   *goallink.Reader
 	version string
 	mux     *http.ServeMux
 	ui      http.Handler
@@ -65,7 +60,7 @@ type Server struct {
 
 // New builds a Server.
 func New(o Options) *Server {
-	s := &Server{store: o.Store, goals: o.Goals, version: o.Version, mux: http.NewServeMux(), epoch: time.Now().UnixNano()}
+	s := &Server{store: o.Store, version: o.Version, mux: http.NewServeMux(), epoch: time.Now().UnixNano()}
 	files, err := fs.Sub(dist, "dist")
 	if err != nil {
 		panic(err)
@@ -81,7 +76,6 @@ func (s *Server) routes() {
 	m.HandleFunc("GET /api/version", s.dataVersion)
 	m.HandleFunc("GET /api/outline", s.outline)
 	m.HandleFunc("GET /api/projects", s.listProjects)
-	m.HandleFunc("GET /api/goals", s.listGoals)
 	m.HandleFunc("POST /api/areas", s.addArea)
 	m.HandleFunc("PATCH /api/areas/{id}", s.editArea)
 	m.HandleFunc("DELETE /api/areas/{id}", s.deleteArea)
@@ -447,36 +441,6 @@ func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ps)
 }
 
-// Goals is goaltracker's goals for the project form and the detail
-// pane. Readable is false when goaltracker's database cannot be read,
-// in which case Goals is empty and goal ids are shown bare.
-type Goals struct {
-	Readable bool            `json:"readable"`
-	Goals    []goallink.Goal `json:"goals"`
-}
-
-func (s *Server) listGoals(w http.ResponseWriter, r *http.Request) {
-	goals, err := s.readGoals(r.Context())
-	writeJSON(w, http.StatusOK, Goals{Readable: err == nil, Goals: goals})
-}
-
-// readGoals lists goaltracker's goals, or says why it cannot. Without
-// a reader the answer is the same as an unreadable database: the ids
-// are all there is.
-func (s *Server) readGoals(ctx context.Context) ([]goallink.Goal, error) {
-	if s.goals == nil {
-		return []goallink.Goal{}, goallink.ErrUnavailable
-	}
-	goals, err := s.goals.All(ctx)
-	if err != nil {
-		return []goallink.Goal{}, err
-	}
-	if goals == nil {
-		goals = []goallink.Goal{}
-	}
-	return goals, nil
-}
-
 // --- areas ---
 
 // areaBody is an area as the UI sends it: every field optional, so the
@@ -545,10 +509,9 @@ func (s *Server) deleteArea(w http.ResponseWriter, r *http.Request) {
 // newProjectBody is a project to add. A new project is always active,
 // so there is no state field; sending one is refused as unknown.
 type newProjectBody struct {
-	Name        string  `json:"name"`
-	Description string  `json:"description"`
-	AreaID      int64   `json:"area_id"`
-	GoalIDs     []int64 `json:"goal_ids"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	AreaID      int64  `json:"area_id"`
 }
 
 func (s *Server) addProject(w http.ResponseWriter, r *http.Request) {
@@ -557,7 +520,7 @@ func (s *Server) addProject(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	p, err := s.store.AddProject(r.Context(), task.NewProject{Name: b.Name, Description: b.Description, AreaID: b.AreaID, GoalIDs: b.GoalIDs})
+	p, err := s.store.AddProject(r.Context(), task.NewProject{Name: b.Name, Description: b.Description, AreaID: b.AreaID})
 	if err != nil {
 		failErr(w, err)
 		return
@@ -566,20 +529,18 @@ func (s *Server) addProject(w http.ResponseWriter, r *http.Request) {
 }
 
 // projectEditBody is the fields of a project to change; a missing field
-// is left alone. An empty goal_ids list clears the links, and area_id 0
-// moves the project out of any area.
+// is left alone. area_id 0 moves the project out of any area.
 type projectEditBody struct {
 	Name        *string     `json:"name"`
 	Description *string     `json:"description"`
 	State       *task.State `json:"state"`
 	AreaID      *int64      `json:"area_id"`
-	GoalIDs     *[]int64    `json:"goal_ids"`
 }
 
 // stateOnly reports whether the body changes the state and nothing
 // else: the UI stepping a project on, or shelving it.
 func (b projectEditBody) stateOnly() bool {
-	return b.State != nil && b.Name == nil && b.Description == nil && b.AreaID == nil && b.GoalIDs == nil
+	return b.State != nil && b.Name == nil && b.Description == nil && b.AreaID == nil
 }
 
 func (s *Server) editProject(w http.ResponseWriter, r *http.Request) {
@@ -602,7 +563,7 @@ func (s *Server) editProject(w http.ResponseWriter, r *http.Request) {
 			p, err = s.store.GetProject(r.Context(), id)
 		}
 	} else {
-		p, err = s.store.UpdateProject(r.Context(), id, task.ProjectEdit{Name: b.Name, Description: b.Description, State: b.State, AreaID: b.AreaID, GoalIDs: b.GoalIDs})
+		p, err = s.store.UpdateProject(r.Context(), id, task.ProjectEdit{Name: b.Name, Description: b.Description, State: b.State, AreaID: b.AreaID})
 	}
 	if err != nil {
 		failErr(w, err)

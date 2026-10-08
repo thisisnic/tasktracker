@@ -3,7 +3,6 @@ package server
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"io"
 	"net"
@@ -16,16 +15,14 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/thisisnic/tasktracker/internal/goallink"
 	"github.com/thisisnic/tasktracker/internal/task"
 )
 
 // setup serves a store holding area "home" (#1) with project "house"
 // (#1) in it, task "paint the hall" (#1) due 2026-01-10 with subtask
 // "buy paint" (#1), and project "work" (#2) in no area with task
-// "email accountant" (#2), undated. goals is a goaltracker database to
-// read, or nil for none.
-func setup(t *testing.T, goals *goallink.Reader) (*httptest.Server, *task.Store) {
+// "email accountant" (#2), undated.
+func setup(t *testing.T) (*httptest.Server, *task.Store) {
 	t.Helper()
 	ctx := context.Background()
 	s, err := task.Open(filepath.Join(t.TempDir(), "t.db"))
@@ -37,7 +34,7 @@ func setup(t *testing.T, goals *goallink.Reader) (*httptest.Server, *task.Store)
 	if err != nil {
 		t.Fatal(err)
 	}
-	house, err := s.AddProject(ctx, task.NewProject{Name: "house", AreaID: home.ID, GoalIDs: []int64{3}})
+	house, err := s.AddProject(ctx, task.NewProject{Name: "house", AreaID: home.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,26 +52,9 @@ func setup(t *testing.T, goals *goallink.Reader) (*httptest.Server, *task.Store)
 	if _, err := s.AddTask(ctx, task.NewTask{ProjectID: work.ID, Title: "email accountant"}); err != nil {
 		t.Fatal(err)
 	}
-	srv := httptest.NewServer(New(Options{Store: s, Goals: goals, Version: "test"}))
+	srv := httptest.NewServer(New(Options{Store: s, Version: "test"}))
 	t.Cleanup(srv.Close)
 	return srv, s
-}
-
-// goaltrackerDB writes a database shaped like goaltracker's, with goals
-// #3 and #7.
-func goaltrackerDB(t *testing.T) *goallink.Reader {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "goaltracker.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if _, err := db.Exec(`CREATE TABLE goals (id INTEGER PRIMARY KEY, statement TEXT NOT NULL, period TEXT NOT NULL);
-		INSERT INTO goals VALUES (3, 'run 500 km', '2026'), (7, 'finish the garden', '2026-Q3')`); err != nil {
-		t.Fatal(err)
-	}
-	return goallink.New(path)
 }
 
 // do sends a request as the UI's client does: every mutation declares
@@ -126,7 +106,7 @@ func want(t *testing.T, srv *httptest.Server, code int, method, path string, bod
 }
 
 func TestMetaAndOutline(t *testing.T) {
-	srv, _ := setup(t, nil)
+	srv, _ := setup(t)
 	var m Meta
 	want(t, srv, 200, "GET", "/api/meta", nil, &m)
 	if m.Version != "test" {
@@ -156,7 +136,7 @@ func TestMetaAndOutline(t *testing.T) {
 }
 
 func TestOutlineAllShowsFinished(t *testing.T) {
-	srv, s := setup(t, nil)
+	srv, s := setup(t)
 	ctx := context.Background()
 	if err := s.MarkProject(ctx, 2, task.Shelved); err != nil {
 		t.Fatal(err)
@@ -258,30 +238,8 @@ func TestVersionMovesOnAnyWrite(t *testing.T) {
 	}
 }
 
-func TestGoals(t *testing.T) {
-	srv, _ := setup(t, goaltrackerDB(t))
-	var g Goals
-	want(t, srv, 200, "GET", "/api/goals", nil, &g)
-	if !g.Readable || len(g.Goals) != 2 || g.Goals[0].ID != 3 || g.Goals[0].Statement != "run 500 km" || g.Goals[1].Period != "2026-Q3" {
-		t.Errorf("goals = %+v", g)
-	}
-
-	// An unreadable database answers with no goals and says so, rather
-	// than failing: the ids still show.
-	srv, _ = setup(t, goallink.New(filepath.Join(t.TempDir(), "absent.db")))
-	_, raw := do(t, srv, "GET", "/api/goals", nil)
-	if string(bytes.TrimSpace(raw)) != `{"readable":false,"goals":[]}` {
-		t.Errorf("unreadable goals = %s", raw)
-	}
-	srv, _ = setup(t, nil)
-	_, raw = do(t, srv, "GET", "/api/goals", nil)
-	if string(bytes.TrimSpace(raw)) != `{"readable":false,"goals":[]}` {
-		t.Errorf("no reader goals = %s", raw)
-	}
-}
-
 func TestAreas(t *testing.T) {
-	srv, s := setup(t, nil)
+	srv, s := setup(t)
 	var a task.Area
 	want(t, srv, 201, "POST", "/api/areas", map[string]any{"name": " garden ", "parent_id": 1}, &a)
 	if a.ID != 2 || a.Name != "garden" || a.ParentID != 1 {
@@ -331,30 +289,27 @@ func TestAreas(t *testing.T) {
 }
 
 func TestProjects(t *testing.T) {
-	srv, _ := setup(t, nil)
+	srv, _ := setup(t)
 	var p task.Project
-	want(t, srv, 201, "POST", "/api/projects", map[string]any{"name": "garden", "description": "dig it", "area_id": 1, "goal_ids": []int64{7, 3, 7}}, &p)
-	if p.ID != 3 || p.Name != "garden" || p.Description != "dig it" || p.AreaID != 1 || p.State != task.Active || len(p.GoalIDs) != 2 || p.GoalIDs[0] != 3 {
+	want(t, srv, 201, "POST", "/api/projects", map[string]any{"name": "garden", "description": "dig it", "area_id": 1}, &p)
+	if p.ID != 3 || p.Name != "garden" || p.Description != "dig it" || p.AreaID != 1 || p.State != task.Active {
 		t.Errorf("added = %+v", p)
 	}
 	if code, b := do(t, srv, "POST", "/api/projects", map[string]any{"name": "x", "state": "done"}); code != 400 {
 		t.Errorf("state on add: %d %s", code, b)
-	}
-	if code, b := do(t, srv, "POST", "/api/projects", map[string]any{"name": "x", "goal_ids": []int64{0}}); code != 400 || !strings.Contains(string(b), "goal id 0") {
-		t.Errorf("bad goal: %d %s", code, b)
 	}
 	if code, b := do(t, srv, "POST", "/api/projects", map[string]any{"name": "x", "area_id": 99}); code != 400 || !strings.Contains(string(b), "area 99: not found") {
 		t.Errorf("missing area: %d %s", code, b)
 	}
 
 	want(t, srv, 200, "PATCH", "/api/projects/3", map[string]any{"state": "shelved", "area_id": 0}, &p)
-	if p.State != task.Shelved || p.AreaID != 0 || p.Name != "garden" || len(p.GoalIDs) != 2 {
+	if p.State != task.Shelved || p.AreaID != 0 || p.Name != "garden" {
 		t.Errorf("edited = %+v", p)
 	}
 	// Stepping the state: state alone, which leaves everything else as
 	// it is, as the TUI's keys do.
 	want(t, srv, 200, "PATCH", "/api/projects/1", map[string]any{"state": "done"}, &p)
-	if p.State != task.Done || p.Name != "house" || p.AreaID != 1 || len(p.GoalIDs) != 1 {
+	if p.State != task.Done || p.Name != "house" || p.AreaID != 1 {
 		t.Errorf("stepped = %+v", p)
 	}
 	if code, b := do(t, srv, "PATCH", "/api/projects/1", map[string]any{"state": "paused"}); code != 400 || !strings.Contains(string(b), "want active, done or shelved") {
@@ -363,14 +318,9 @@ func TestProjects(t *testing.T) {
 	if code, _ := do(t, srv, "PATCH", "/api/projects/99", map[string]any{"state": "done"}); code != 404 {
 		t.Errorf("missing project, state alone: %d", code)
 	}
-	// goal_ids [] clears the links; null, like a missing field, leaves
-	// them alone, as it does every other field.
-	want(t, srv, 200, "PATCH", "/api/projects/3", map[string]any{"goal_ids": []int64{}}, &p)
-	if len(p.GoalIDs) != 0 {
-		t.Errorf("[] did not clear goals: %+v", p)
-	}
-	want(t, srv, 200, "PATCH", "/api/projects/1", map[string]any{"goal_ids": nil, "name": nil}, &p)
-	if len(p.GoalIDs) != 1 || p.Name != "house" {
+	// null, like a missing field, leaves a field alone.
+	want(t, srv, 200, "PATCH", "/api/projects/1", map[string]any{"name": nil, "area_id": nil}, &p)
+	if p.Name != "house" || p.AreaID != 1 {
 		t.Errorf("null changed something: %+v", p)
 	}
 	if code, b := do(t, srv, "PATCH", "/api/projects/3", map[string]any{"state": "paused"}); code != 400 || !strings.Contains(string(b), "want active, done or shelved") {
@@ -392,7 +342,7 @@ func TestProjects(t *testing.T) {
 }
 
 func TestTasks(t *testing.T) {
-	srv, _ := setup(t, nil)
+	srv, _ := setup(t)
 	var tk task.Task
 	today := time.Now().Format("2006-01-02")
 	want(t, srv, 201, "POST", "/api/tasks", map[string]any{"project_id": 1, "title": "fix the gate", "due": "today", "issue": "octocat/house#4", "notes": "\n\nhinge\n"}, &tk)
@@ -481,7 +431,7 @@ func TestTasks(t *testing.T) {
 // TestArchiveFinished puts the done and dropped tasks away in one call
 // and leaves the open one listed; a second call has nothing to do.
 func TestArchiveFinished(t *testing.T) {
-	srv, _ := setup(t, nil)
+	srv, _ := setup(t)
 	var tk task.Task
 	want(t, srv, 201, "POST", "/api/tasks", map[string]any{"project_id": 1, "title": "clear the gutters"}, &tk)
 	want(t, srv, 200, "PATCH", "/api/tasks/1", map[string]any{"status": "done"}, &tk)
@@ -508,7 +458,7 @@ func TestArchiveFinished(t *testing.T) {
 }
 
 func TestCopyTask(t *testing.T) {
-	srv, _ := setup(t, nil)
+	srv, _ := setup(t)
 	var n task.TaskNode
 	want(t, srv, 201, "POST", "/api/tasks/1/copy", map[string]any{"title": "paint the stairs", "project_id": 2}, &n)
 	if n.Task.ID != 3 || n.Task.Title != "paint the stairs" || n.Task.ProjectID != 2 || n.Task.Due != "2026-01-10" || n.Task.Notes != "two coats" || n.Task.Status != task.Todo {
@@ -526,7 +476,7 @@ func TestCopyTask(t *testing.T) {
 }
 
 func TestSubtasks(t *testing.T) {
-	srv, _ := setup(t, nil)
+	srv, _ := setup(t)
 	var st task.Subtask
 	want(t, srv, 201, "POST", "/api/tasks/1/subtasks", map[string]any{"title": "move furniture"}, &st)
 	if st.ID != 2 || st.TaskID != 1 || st.Title != "move furniture" || st.Done {
@@ -568,7 +518,7 @@ func TestSubtasks(t *testing.T) {
 }
 
 func TestCrossOriginRefused(t *testing.T) {
-	srv, _ := setup(t, nil)
+	srv, _ := setup(t)
 	tick := map[string]any{"done": true}
 	if code, _ := do(t, srv, "PUT", "/api/subtasks/1/done", tick, "Origin", "http://evil.example"); code != 403 {
 		t.Errorf("evil origin: %d", code)
@@ -597,7 +547,7 @@ func TestCrossOriginRefused(t *testing.T) {
 }
 
 func TestForeignHostRefused(t *testing.T) {
-	srv, _ := setup(t, nil)
+	srv, _ := setup(t)
 	if code, _ := do(t, srv, "GET", "/api/outline", nil, "Host", "evil.example:7344"); code != 403 {
 		t.Errorf("foreign host: %d", code)
 	}
@@ -609,7 +559,7 @@ func TestForeignHostRefused(t *testing.T) {
 }
 
 func TestUnknownRouteAndMethod(t *testing.T) {
-	srv, _ := setup(t, nil)
+	srv, _ := setup(t)
 	if code, b := do(t, srv, "GET", "/api/nothing", nil); code != 404 || !strings.Contains(string(b), "no such endpoint") {
 		t.Errorf("unknown route: %d %s", code, b)
 	}
@@ -634,7 +584,7 @@ func TestUnknownRouteAndMethod(t *testing.T) {
 func TestUI(t *testing.T) {
 	// Every answer, the page's included, refuses to be framed by another
 	// site.
-	srv, _ := setup(t, nil)
+	srv, _ := setup(t)
 	for _, path := range []string{"/", "/api/outline"} {
 		resp, err := http.Get(srv.URL + path)
 		if err != nil {
@@ -684,7 +634,7 @@ func TestListenRefusesTakenPort(t *testing.T) {
 }
 
 func TestServeStopsWithContext(t *testing.T) {
-	srv, s := setup(t, nil)
+	srv, s := setup(t)
 	srv.Close()
 	ln, err := Listen(0)
 	if err != nil {

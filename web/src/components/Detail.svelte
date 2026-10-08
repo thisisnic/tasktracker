@@ -1,7 +1,7 @@
 <script lang="ts">
   import { Button, Chip } from "@kenn-io/kit-ui";
   import { CheckSquare, Square } from "@lucide/svelte";
-  import { areaCounts, areaOpenTasks, isOpen, issueRef, nextState, nextStatus, openTasks, ticked, type Project } from "../lib/api";
+  import { areaCounts, areaOpenTasks, isOpen, issueRef, nextState, nextStatus, openTasks, ticked } from "../lib/api";
   import type { AppState } from "../lib/app.svelte";
   import { bucketName, bucketSpan, daysUntil, dueWords, overdue, rowTarget } from "../lib/rows";
 
@@ -11,16 +11,6 @@
 
   const row = $derived(app.selected());
   const folded = $derived(row ? app.isFolded(rowTarget(row)) : false);
-
-  /** The labelled goals for a project: "#3 run 500 km" when goaltracker
-   * has the goal, "#3" when it does not or cannot be read. */
-  function goalLabels(p: Project): string[] {
-    const byId = new Map(app.goals.goals.map((g) => [g.id, g]));
-    return (p.goal_ids ?? []).map((id) => {
-      const g = byId.get(id);
-      return g?.statement ? `#${id} ${g.statement}` : `#${id}`;
-    });
-  }
 
   const statusTone = { todo: "neutral", done: "success", dropped: "muted" } as const;
 
@@ -82,7 +72,6 @@
     </div>
   {:else if row.kind === "project"}
     {@const p = row.project!}
-    {@const goals = goalLabels(p.project)}
     <dl>
       {#if p.project.area_id}
         <dt>Area</dt>
@@ -99,15 +88,6 @@
     {#if p.project.description}
       <h3>About</h3>
       <p class="prose">{p.project.description}</p>
-    {/if}
-    {#if goals.length > 0}
-      <h3>Goals</h3>
-      <ul class="plain">
-        {#each goals as g (g)}
-          <li>{g}</li>
-        {/each}
-      </ul>
-      {#if !app.goals.readable}<p class="muted">goaltracker's database could not be read, so the goals are shown by id.</p>{/if}
     {/if}
     <div class="actions">
       <Button size="sm" surface="solid" tone="info" onclick={() => app.edit()}>Edit</Button>

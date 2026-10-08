@@ -14,7 +14,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/thisisnic/tasktracker/internal/config"
-	"github.com/thisisnic/tasktracker/internal/goallink"
 	"github.com/thisisnic/tasktracker/internal/task"
 	"github.com/thisisnic/tasktracker/internal/update"
 	"github.com/thisisnic/tasktracker/internal/version"
@@ -67,10 +66,6 @@ the same data a scriptable interface; add --json to any list or show
 command for machine-readable output. The browser UI's JSON API is under
 /api/ on the same port.
 
-A project can link to goals in goaltracker. tasktracker reads goaltracker's
-database read-only to show their statements; set [goaltracker] db in the
-config if it is not in the usual place.
-
 Backups are encrypted snapshots written to a folder you choose. Run
 tasktracker key new once to set that up; with on_quit set in the config the
 TUI writes one when it exits, unless nothing changed while it was open.
@@ -108,7 +103,7 @@ line; tasktracker update installs it.`,
 	root.Flags().IntVar(&port, "port", 0, "port to serve the browser UI on (overrides the config)")
 	root.Flags().BoolVar(&noOpen, "no-open", false, "do not open a browser")
 	root.SetVersionTemplate("tasktracker {{.Version}}\n")
-	root.AddCommand(tuiCmd(&dbPath, &cfgPath, &newer), areaCmd(&dbPath), projectCmd(&dbPath, &cfgPath), taskCmd(&dbPath), subtaskCmd(&dbPath), keyCmd(), backupCmd(&dbPath, &cfgPath), restoreCmd(&dbPath, &cfgPath), versionCmd(), updateCmd())
+	root.AddCommand(tuiCmd(&dbPath, &cfgPath, &newer), areaCmd(&dbPath), projectCmd(&dbPath), taskCmd(&dbPath), subtaskCmd(&dbPath), keyCmd(), backupCmd(&dbPath, &cfgPath), restoreCmd(&dbPath, &cfgPath), versionCmd(), updateCmd())
 	return root
 }
 
@@ -123,28 +118,6 @@ func openDB(path string) (*task.Store, error) {
 
 func openStore(path *string) (*task.Store, error) {
 	return openDB(*path)
-}
-
-// goalReader looks goals up in goaltracker's database: the one named in
-// the config, or goaltracker's own default location. A config that cannot
-// be read is reported, since it may be the one naming the database, and
-// the default location is used.
-func goalReader(cmd *cobra.Command, cfgPath string) *goallink.Reader {
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "note: config: %v; using goaltracker's default database\n", err)
-	}
-	return goalsFor(cfg, err)
-}
-
-// goalsFor picks the goaltracker database from a loaded config: the one it
-// names, or goaltracker's own default location when it names none or
-// could not be read (err is config.Load's error).
-func goalsFor(cfg config.Config, err error) *goallink.Reader {
-	if err == nil && cfg.Goaltracker.DB != "" {
-		return goallink.New(cfg.Goaltracker.DB)
-	}
-	return goallink.New(goallink.DefaultPath())
 }
 
 // Execute runs the root command and exits non-zero on error.

@@ -43,7 +43,7 @@ export function fixture(): Outline {
         ],
         projects: [
           {
-            project: { id: 1, name: "house", state: "active", area_id: 1, goal_ids: [3], created_at: made(3) },
+            project: { id: 1, name: "house", state: "active", area_id: 1, created_at: made(3) },
             tasks: [
               {
                 task: { id: 1, project_id: 1, title: "paint the hall", status: "todo", due: "2026-09-10", notes: "two coats", created_at: made(5) },
