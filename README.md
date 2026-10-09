@@ -120,10 +120,11 @@ tasktracker task list --due --json
   does, so an agent's changes show up without a reload, and a page left
   open across an upgrade loads itself afresh.
 - **By project or by deadline** - The tree groups tasks under their
-  projects. Press `v` for the open tasks as one list under the headings
-  Overdue, Next 7 days, Next 30 days, Longer and No deadline, soonest
-  first within each. The headings fold with `←`/`→` like areas do, and
-  `v` again goes back.
+  projects. Press `v` for the open tasks as one list, soonest first,
+  under a heading for each week: Overdue, then this week and the four
+  after it as "Week beginning 5th October" and so on, weeks starting on
+  Monday, then Later and No deadline. The headings fold with `←`/`→`
+  like areas do, and `v` again goes back.
 - **Archive, don't lose** - A done or dropped task stays in the tree,
   greyed, until you press `z` to archive it. `f` shows the archive, and
   `z` there brings a task back; so does reopening it.

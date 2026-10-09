@@ -187,8 +187,16 @@ Layout, to be adjusted as it gets used:
 - The same pane arranged by deadline: every open task as one list,
   soonest due first, undated tasks last, subtasks still under their task
   and the project name after the title. The list is split under headings
-  for how soon: overdue, the next 7 days (from today), the next 30,
-  longer, and no deadline, each with a count and left out when empty. The
+  for how soon: overdue, then a heading per week for the week today is
+  in and the four after it, then later and no deadline, each with a
+  count and left out when empty. Weeks begin on Monday and are named by
+  that date, "Week beginning 5th October", because planning happens a
+  week at a time and a rolling "next 7 days" moved under the planner
+  every morning; a task due earlier this week is overdue, not this
+  week's. A heading's id is fixed, so a fold on the week after next
+  stays on whichever week that is; Overdue, Later and No deadline kept
+  the ids they had before the weeks, and a fold saved on a retired
+  heading is dropped on load rather than landing on a week. The
   headings fold like areas do, with the same keys, and the folds are
   kept with the others. Done and dropped tasks are not due any more and
   are not what this view is for, so they are left out of it; the

@@ -143,7 +143,7 @@
 
         <span class="main">
           {#if r.kind === "heading"}
-            <span class="name">{bucketName(r.bucket!)}</span>
+            <span class="name">{bucketName(r.bucket!, app.today)}</span>
           {:else if r.kind === "area" || r.kind === "project"}
             <span class="name">{r.kind === "area" ? r.area!.area.name : r.project!.project.name}</span>
           {:else if r.kind === "task"}

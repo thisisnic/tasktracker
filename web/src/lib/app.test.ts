@@ -219,6 +219,7 @@ describe("switching views", () => {
     selectKey(app, "task:2");
     app.toggleView();
     expect(app.view).toBe("deadline");
+    expect(app.status).toBe("by deadline: open tasks under overdue, a week at a time, later, no deadline");
     expect(selected(app)).toBe("task:2");
     app.toggleView();
     expect(app.view).toBe("project");
@@ -285,7 +286,7 @@ describe("switching views", () => {
   it("goes back from a heading to the first task due about as soon, in tree order", async () => {
     const { app } = await open();
     app.toggleView();
-    selectKey(app, "heading:2");
+    selectKey(app, "heading:6");
     app.toggleView();
     expect(selected(app)).toBe("task:2");
     app.toggleView();
@@ -301,7 +302,7 @@ describe("finishing a task", () => {
   it("by deadline drops the row and lands on the next task, not the heading that slid in", async () => {
     const { app, fake } = await open();
     app.toggleView();
-    selectKey(app, "task:2"); // alone under Next 7 days; Longer's heading follows
+    selectKey(app, "task:2"); // alone under this week; Later's heading follows
     await app.advance();
     expect(fake.calls).toEqual(['editTask 2 {"status":"done"}']);
     expect(app.status).toBe("task #2 done (gone from this list; by project shows it until archived)");
@@ -574,6 +575,15 @@ describe("folding", () => {
     await app.reload();
     expect(app.folds).toEqual({ "project:99": "2026-01-01T00:00:00Z", "heading:1": "" });
   });
+
+  it("drops a fold on a retired heading and keeps No deadline's, which kept its id", async () => {
+    const { app } = await open();
+    app.folds = { "heading:2": "", "heading:3": "", "heading:5": "" };
+    await app.reload();
+    expect(app.folds).toEqual({ "heading:5": "" });
+    app.toggleView();
+    expect(app.rows.map((r) => key(rowTarget(r)))).not.toContain("task:4");
+  });
 });
 
 describe("a click on a row", () => {
@@ -702,7 +712,7 @@ describe("the drawer", () => {
     expect(app.status).toBe("saved task #1");
 
     // By deadline, into a folded bucket: task 2 goes from this week to
-    // Longer, which is folded.
+    // Later, which is folded.
     app.toggleView();
     app.folds = { "heading:4": "" };
     expect(app.rows.map((r) => key(rowTarget(r)))).not.toContain("task:3");
@@ -969,7 +979,7 @@ describe("midnight", () => {
       "task:1",
       "subtask:1",
       "subtask:2",
-      "heading:2",
+      "heading:6",
       "task:2",
       "heading:4",
       "task:3",

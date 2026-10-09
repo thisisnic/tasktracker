@@ -29,7 +29,7 @@ var fixed = time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
 //
 //	house
 //	  paint the hall  due 2026-09-10 (overdue)   [x] buy paint  [ ] move furniture
-//	  fix the gate    due 2026-09-20
+//	  fix the gate    due 2026-09-19
 //	work
 //	  email accountant
 func setup(t *testing.T) (*model, *task.Store) {
@@ -59,7 +59,7 @@ func setupAt(t *testing.T, path string) (*model, *task.Store) {
 	must(err)
 	paint, err := store.AddTask(ctx, task.NewTask{ProjectID: house.ID, Title: "paint the hall", Due: "2026-09-10"})
 	must(err)
-	_, err = store.AddTask(ctx, task.NewTask{ProjectID: house.ID, Title: "fix the gate", Due: "2026-09-20"})
+	_, err = store.AddTask(ctx, task.NewTask{ProjectID: house.ID, Title: "fix the gate", Due: "2026-09-19"})
 	must(err)
 	_, err = store.AddTask(ctx, task.NewTask{ProjectID: work.ID, Title: "email accountant"})
 	must(err)
@@ -229,7 +229,7 @@ func labels(m *model) []string {
 		case rowSubtask:
 			out = append(out, "S:"+r.subtask.Title)
 		case rowHeading:
-			out = append(out, "H:"+r.bucket.String())
+			out = append(out, "H:"+r.bucket.name(m.now()))
 		}
 	}
 	return out
@@ -442,7 +442,7 @@ func TestDeadlineView(t *testing.T) {
 	// Every open task, soonest due first, undated last, subtasks under
 	// their task, under a heading for how soon; the cursor is on the task
 	// it was on.
-	want := []string{"H:Overdue", "T:paint the hall", "S:buy paint", "S:move furniture", "H:Next 7 days", "T:fix the gate", "H:No deadline", "T:email accountant"}
+	want := []string{"H:Overdue", "T:paint the hall", "S:buy paint", "S:move furniture", "H:Week beginning 14th September", "T:fix the gate", "H:No deadline", "T:email accountant"}
 	if got := labels(m); !reflect.DeepEqual(got, want) {
 		t.Errorf("deadline rows = %v\nwant   %v", got, want)
 	}
@@ -451,7 +451,7 @@ func TestDeadlineView(t *testing.T) {
 		t.Errorf("g: %d %v", m.cursor, r.target())
 	}
 	view := plain(m)
-	for _, want := range []string{"tasktracker · by deadline", "paint the hall  house", "  [x] buy paint", "v by project", "▾ Overdue", "1 task", "▾ Next 7 days", "▾ No deadline", "before 2026-09-17", "tasks 1 open", "fold/unfold"} {
+	for _, want := range []string{"tasktracker · by deadline", "paint the hall  house", "  [x] buy paint", "v by project", "▾ Overdue", "1 task", "▾ Week beginning 14th September", "▾ No deadline", "before 2026-09-17", "tasks 1 open", "fold/unfold"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("deadline view missing %q:\n%s", want, view)
 		}
@@ -501,7 +501,7 @@ func TestDeadlineView(t *testing.T) {
 	// A finished task is not due any more: it leaves this list, and the
 	// status says where it went.
 	press(m, "j", "space")
-	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Next 7 days", "T:fix the gate", "H:No deadline", "T:email accountant"}) || !strings.Contains(m.status, "by project shows it until archived") {
+	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Week beginning 14th September", "T:fix the gate", "H:No deadline", "T:email accountant"}) || !strings.Contains(m.status, "by project shows it until archived") {
 		t.Errorf("after finishing: rows=%v status=%q", got, m.status)
 	}
 	if r, ok := m.selected(); !ok || r.task.Task.Title != "fix the gate" {
@@ -530,7 +530,7 @@ func TestDeadlineView(t *testing.T) {
 		t.Fatal(err)
 	}
 	press(m, "f")
-	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Next 7 days", "T:fix the gate", "H:No deadline", "T:email accountant", "T:leftover"}) || !strings.Contains(m.status, "adds open tasks in finished projects") {
+	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Week beginning 14th September", "T:fix the gate", "H:No deadline", "T:email accountant", "T:leftover"}) || !strings.Contains(m.status, "adds open tasks in finished projects") {
 		t.Errorf("with archived shown: %v status=%q", got, m.status)
 	}
 	if strings.Contains(plain(m), "Overdue") {
@@ -554,7 +554,7 @@ func TestDeadlineView(t *testing.T) {
 		t.Fatal(err)
 	}
 	press(m, "r")
-	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Next 7 days", "T:email accountant", "H:Longer", "T:fix the gate"}) {
+	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Week beginning 14th September", "T:email accountant", "H:Later", "T:fix the gate"}) {
 		t.Errorf("after date changes: %v", got)
 	}
 	// Saving by deadline leaves the tree's folds alone: fold house first.
@@ -610,15 +610,15 @@ func TestDeadlineFold(t *testing.T) {
 	m, store := setup(t)
 	ctx := context.Background()
 	press(m, "v", "g", "left") // on Overdue
-	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Overdue", "H:Next 7 days", "T:fix the gate", "H:No deadline", "T:email accountant"}) || m.status != "collapsed Overdue; ← shows its tasks again" {
+	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Overdue", "H:Week beginning 14th September", "T:fix the gate", "H:No deadline", "T:email accountant"}) || m.status != "collapsed Overdue; ← shows its tasks again" {
 		t.Errorf("fold on a heading: rows=%v status=%q", got, m.status)
 	}
 	view := plain(m)
 	if !strings.Contains(view, "▸ Overdue") || !strings.Contains(view, "collapsed; ← shows its tasks") {
 		t.Errorf("folded heading view:\n%s", view)
 	}
-	press(m, "j", "j", "right") // on fix the gate: folds Next 7 days and moves there
-	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Overdue", "H:Next 7 days", "H:No deadline", "T:email accountant"}) || m.cursor != 1 {
+	press(m, "j", "j", "right") // on fix the gate: folds this week and moves there
+	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Overdue", "H:Week beginning 14th September", "H:No deadline", "T:email accountant"}) || m.cursor != 1 {
 		t.Errorf("fold from a task: rows=%v cursor=%d", got, m.cursor)
 	}
 	// Folds survive a switch to by project and back, and are not pruned.
@@ -626,13 +626,13 @@ func TestDeadlineFold(t *testing.T) {
 	// soon; v back from that task, folded away here, lands on the heading.
 	press(m, "v")
 	if r, _ := m.selected(); r.target() != (target{rowTask, 2}) {
-		t.Errorf("v from the Next 7 days heading: %v", r.target())
+		t.Errorf("v from this week's heading: %v", r.target())
 	}
 	press(m, "v")
-	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Overdue", "H:Next 7 days", "H:No deadline", "T:email accountant"}) {
+	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Overdue", "H:Week beginning 14th September", "H:No deadline", "T:email accountant"}) {
 		t.Errorf("after v v: %v", got)
 	}
-	if r, _ := m.selected(); r.target() != (target{rowHeading, int64(bucketWeek)}) {
+	if r, _ := m.selected(); r.target() != (target{rowHeading, int64(bucketThisWeek)}) {
 		t.Errorf("v back onto a folded heading: %v", r.target())
 	}
 	// v from a heading lands on its first task in the tree, or on that
@@ -653,7 +653,7 @@ func TestDeadlineFold(t *testing.T) {
 		t.Fatal(err)
 	}
 	press(m, "r", "g")
-	if r, _ := m.selected(); r.kind != rowHeading || r.bucket != bucketWeek {
+	if r, _ := m.selected(); r.kind != rowHeading || r.bucket != bucketThisWeek {
 		t.Fatalf("Overdue should be gone: %v", labels(m))
 	}
 	if err := store.MarkTask(ctx, 1, task.Todo); err != nil {
@@ -674,7 +674,7 @@ func TestDeadlineFold(t *testing.T) {
 	if m.mode != modeBrowse || m.err != nil {
 		t.Fatalf("form: mode=%v err=%v", m.mode, m.err)
 	}
-	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Overdue", "H:Next 7 days", "T:email accountant", "T:fix the gate"}) {
+	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Overdue", "H:Week beginning 14th September", "T:email accountant", "T:fix the gate"}) {
 		t.Errorf("after saving under a folded heading: %v", got)
 	}
 	if r, _ := m.selected(); r.target() != (target{rowTask, 3}) {
@@ -692,7 +692,7 @@ func TestDeadlineFold(t *testing.T) {
 		t.Fatal(err)
 	}
 	press(m, "r")
-	if got := labels(m); got[0] != "H:Next 7 days" || !m.collapsed[target{rowHeading, int64(bucketOverdue)}] {
+	if got := labels(m); got[0] != "H:Week beginning 14th September" || !m.collapsed[target{rowHeading, int64(bucketOverdue)}] {
 		t.Errorf("empty bucket kept its heading or lost its fold: %v", got)
 	}
 	press(m, "v", "v")
@@ -703,7 +703,7 @@ func TestDeadlineFold(t *testing.T) {
 		t.Fatal(err)
 	}
 	press(m, "r", "g")
-	if got := labels(m); got[0] != "H:Overdue" || got[1] != "H:Next 7 days" || !strings.Contains(plain(m), "▸ Overdue") {
+	if got := labels(m); got[0] != "H:Overdue" || got[1] != "H:Week beginning 14th September" || !strings.Contains(plain(m), "▸ Overdue") {
 		t.Errorf("heading back after its bucket refilled: %v", got)
 	}
 	press(m, "left")
@@ -757,12 +757,12 @@ func TestLandByDeadlineFolded(t *testing.T) {
 	press(m, "v", "v", "g", "j") // back on urgent
 	// Finishing a task whose group is followed by a heading leaves the
 	// cursor on the next task, not the heading.
-	press(m, "j") // paint the hall: last group under Overdue, before Next 7 days
+	press(m, "j") // paint the hall: last group under Overdue, before this week
 	if r, _ := m.selected(); r.target() != (target{rowTask, 1}) {
 		t.Fatalf("cursor before finishing: %d %v %v", m.cursor, r.target(), labels(m))
 	}
 	press(m, "space")
-	if r, _ := m.selected(); r.target() != (target{rowTask, 2}) || labels(m)[m.cursor-1] != "H:Next 7 days" {
+	if r, _ := m.selected(); r.target() != (target{rowTask, 2}) || labels(m)[m.cursor-1] != "H:Week beginning 14th September" {
 		t.Errorf("cursor after finishing before a heading: %d %v %v", m.cursor, r.target(), labels(m))
 	}
 }
@@ -937,9 +937,9 @@ func TestDeadlineOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, in := range []task.NewTask{
-		{ProjectID: beds.ID, Title: "weed", Due: "2026-09-20"}, // same day as fix the gate
+		{ProjectID: beds.ID, Title: "weed", Due: "2026-09-19"}, // same day as fix the gate
 		{ProjectID: beds.ID, Title: "mulch"},                   // undated
-		{ProjectID: shed.ID, Title: "clear out", Due: "2026-09-20"},
+		{ProjectID: shed.ID, Title: "clear out", Due: "2026-09-19"},
 		{ProjectID: shed.ID, Title: "paint shed"},
 	} {
 		if _, err := store.AddTask(ctx, in); err != nil {
@@ -954,7 +954,7 @@ func TestDeadlineOrder(t *testing.T) {
 	// undated.
 	want := []string{
 		"H:Overdue", "T:paint the hall", "S:buy paint", "S:move furniture", // 2026-09-10
-		"H:Next 7 days", "T:weed", "T:clear out", "T:fix the gate", // 2026-09-20, tree order
+		"H:Week beginning 14th September", "T:weed", "T:clear out", "T:fix the gate", // 2026-09-19, tree order
 		"H:No deadline", "T:mulch", "T:paint shed", "T:email accountant", // undated, tree order
 	}
 	if got := labels(m); !reflect.DeepEqual(got, want) {
@@ -993,32 +993,106 @@ func TestDeadlineOrder(t *testing.T) {
 	}
 }
 
+func TestPollTurnsTheDay(t *testing.T) {
+	m, store := setup(t)
+	ctx := context.Background()
+	if _, err := store.AddTask(ctx, task.NewTask{ProjectID: 1, Title: "clear gutters", Due: "2026-09-25"}); err != nil {
+		t.Fatal(err)
+	}
+	press(m, "r", "v")
+	m.selectTarget(target{rowTask, 4}) // clear gutters, under next week
+	before := []string{"H:Overdue", "T:paint the hall", "S:buy paint", "S:move furniture", "H:Week beginning 14th September", "T:fix the gate", "H:Week beginning 21st September", "T:clear gutters", "H:No deadline", "T:email accountant"}
+	if got := labels(m); !reflect.DeepEqual(got, before) {
+		t.Fatalf("rows on Thursday the 17th: %v", got)
+	}
+	m.status = "as it was"
+	// Nothing is written, but the clock passes midnight into Monday the
+	// 21st: a poll regroups the rows from the new day. Fix the gate, due
+	// Saturday, is overdue; clear gutters is under this week, whose span
+	// now starts on the Monday; the cursor stays on it, and the poll says
+	// nothing about it.
+	m.now = func() time.Time { return time.Date(2026, 9, 21, 0, 0, 1, 0, time.UTC) }
+	deliver(m, pollMsg{})
+	after := []string{"H:Overdue", "T:paint the hall", "S:buy paint", "S:move furniture", "T:fix the gate", "H:Week beginning 21st September", "T:clear gutters", "H:No deadline", "T:email accountant"}
+	if got := labels(m); !reflect.DeepEqual(got, after) {
+		t.Errorf("rows on Monday the 21st: %v", got)
+	}
+	if r, _ := m.selected(); r.target() != (target{rowTask, 4}) || m.cursor != 6 || m.status != "as it was" || m.changed || m.err != nil {
+		t.Errorf("after the day turned: %v at %d status=%q changed=%v err=%v", r.target(), m.cursor, m.status, m.changed, m.err)
+	}
+	press(m, "k")
+	if r, _ := m.selected(); r.kind != rowHeading || r.bucket != bucketThisWeek || !strings.Contains(plain(m), "due   2026-09-21 to 2026-09-27") {
+		t.Errorf("this week's heading on Monday: %v\n%s", r.target(), plain(m))
+	}
+	// A poll later the same day leaves the rows alone.
+	m.now = func() time.Time { return time.Date(2026, 9, 21, 18, 0, 0, 0, time.UTC) }
+	press(m, "j")
+	deliver(m, pollMsg{})
+	if got := labels(m); !reflect.DeepEqual(got, after) || m.cursor != 6 {
+		t.Errorf("rows later on Monday: %v at %d", got, m.cursor)
+	}
+}
+
 func TestBucketOf(t *testing.T) {
+	// 2026-09-17 is a Thursday; its week began on Monday the 14th.
 	cases := map[string]bucket{
 		"":           bucketNone,
 		"2026-09-16": bucketOverdue,
-		"2026-09-17": bucketWeek,
-		"2026-09-23": bucketWeek,
-		"2026-09-24": bucketMonth,
-		"2026-10-16": bucketMonth,
-		"2026-10-17": bucketLonger,
-		"2027-01-01": bucketLonger,
+		"2026-09-17": bucketThisWeek,
+		"2026-09-20": bucketThisWeek,
+		"2026-09-21": bucketThisWeek + 1,
+		"2026-09-27": bucketThisWeek + 1,
+		"2026-10-05": bucketThisWeek + 3,
+		"2026-10-18": bucketThisWeek + 4,
+		"2026-10-19": bucketLater,
+		"2027-01-01": bucketLater,
 	}
 	for due, want := range cases {
 		if got := bucketOf(due, fixed); got != want {
 			t.Errorf("bucketOf(%q) = %v, want %v", due, got, want)
 		}
 	}
+	names := map[bucket]string{
+		bucketOverdue:      "Overdue",
+		bucketThisWeek:     "Week beginning 14th September",
+		bucketThisWeek + 1: "Week beginning 21st September",
+		bucketThisWeek + 2: "Week beginning 28th September",
+		bucketThisWeek + 3: "Week beginning 5th October",
+		bucketThisWeek + 4: "Week beginning 12th October",
+		bucketLater:        "Later",
+		bucketNone:         "No deadline",
+	}
+	for b, want := range names {
+		if got := b.name(fixed); got != want {
+			t.Errorf("%d name = %q, want %q", b, got, want)
+		}
+	}
 	spans := map[bucket]string{
-		bucketOverdue: "before 2026-09-17",
-		bucketWeek:    "2026-09-17 to 2026-09-23",
-		bucketMonth:   "2026-09-24 to 2026-10-16",
-		bucketLonger:  "from 2026-10-17",
-		bucketNone:    "no due date",
+		bucketOverdue:      "before 2026-09-17",
+		bucketThisWeek:     "2026-09-17 to 2026-09-20",
+		bucketThisWeek + 1: "2026-09-21 to 2026-09-27",
+		bucketThisWeek + 4: "2026-10-12 to 2026-10-18",
+		bucketLater:        "from 2026-10-19",
+		bucketNone:         "no due date",
 	}
 	for b, want := range spans {
 		if got := b.span(fixed); got != want {
-			t.Errorf("%v span = %q, want %q", b, got, want)
+			t.Errorf("%d span = %q, want %q", b, got, want)
+		}
+	}
+	// A Monday's week starts that day, a Sunday's the Monday before; and
+	// the day of the month takes the right ending.
+	monday := time.Date(2026, 9, 21, 23, 0, 0, 0, time.UTC)
+	sunday := time.Date(2026, 9, 27, 1, 0, 0, 0, time.UTC)
+	if got := bucketThisWeek.name(monday); got != "Week beginning 21st September" {
+		t.Errorf("Monday: %q", got)
+	}
+	if got := bucketThisWeek.name(sunday); got != "Week beginning 21st September" {
+		t.Errorf("Sunday: %q", got)
+	}
+	for n, want := range map[int]string{1: "1st", 2: "2nd", 3: "3rd", 4: "4th", 11: "11th", 12: "12th", 13: "13th", 22: "22nd", 23: "23rd", 31: "31st"} {
+		if got := ordinal(n); got != want {
+			t.Errorf("ordinal(%d) = %q, want %q", n, got, want)
 		}
 	}
 }
@@ -1505,14 +1579,14 @@ func TestPollLandsByDeadline(t *testing.T) {
 	if r, _ := m.selected(); r.target() != (target{rowTask, 1}) {
 		t.Fatalf("start: %v", r.target())
 	}
-	// The due date changes elsewhere: the task moves into the next 7
-	// days, after fix the gate, and the cursor follows it.
-	due := "2026-09-21"
+	// The due date changes elsewhere: the task moves into this week,
+	// after fix the gate, and the cursor follows it.
+	due := "2026-09-20"
 	if _, err := other.UpdateTask(ctx, 1, task.TaskEdit{Due: &due}); err != nil {
 		t.Fatal(err)
 	}
 	deliver(m, pollMsg{})
-	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Next 7 days", "T:fix the gate", "T:paint the hall", "S:buy paint", "S:move furniture", "H:No deadline", "T:email accountant"}) {
+	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Week beginning 14th September", "T:fix the gate", "T:paint the hall", "S:buy paint", "S:move furniture", "H:No deadline", "T:email accountant"}) {
 		t.Errorf("rows after the due date moved: %v", got)
 	}
 	if r, _ := m.selected(); r.target() != (target{rowTask, 1}) || m.cursor != 2 || !m.changed {
@@ -1524,7 +1598,7 @@ func TestPollLandsByDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	deliver(m, pollMsg{})
-	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Next 7 days", "T:fix the gate", "H:No deadline", "T:email accountant"}) {
+	if got := labels(m); !reflect.DeepEqual(got, []string{"H:Week beginning 14th September", "T:fix the gate", "H:No deadline", "T:email accountant"}) {
 		t.Errorf("rows after the delete: %v", got)
 	}
 	if r, _ := m.selected(); r.target() != (target{rowTask, 3}) {
@@ -1658,11 +1732,28 @@ func TestFoldsPersist(t *testing.T) {
 		t.Errorf("folds file keeps the old project's fold: %q", data)
 	}
 
+	// The headings Next 7 days (2) and Next 30 days (3) were retired when
+	// the weeks came in; a fold saved on one is dropped on load, with no
+	// error, while No deadline keeps its id and its fold. Saving writes
+	// the file without the retired ones.
+	if err := os.WriteFile(folds, []byte("heading 2\nheading 3\nheading 5\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := newModel(ctx, store)
+	old.foldsPath = folds
+	if err := old.loadFolds(); err != nil || !reflect.DeepEqual(old.collapsed, map[target]bool{{rowHeading, int64(bucketNone)}: true}) {
+		t.Errorf("retired folds: err=%v collapsed=%v", err, old.collapsed)
+	}
+	old.saveFolds()
+	if data, _ := os.ReadFile(folds); old.foldsErr != nil || string(data) != "heading 5\n" {
+		t.Errorf("folds file after retired folds were read: %q", data)
+	}
+
 	// A line that is not a fold is skipped and reported, and the rest of
 	// the file is still read; so is a heading that is not one of the
 	// buckets, or an area or project without its stamp. A missing file
 	// is no folds and no error.
-	if err := os.WriteFile(folds, []byte("project 1 2026-09-01T00:00:00Z\n\nproject one\nheading 1\nheading 9\narea 1\n"), 0o600); err != nil {
+	if err := os.WriteFile(folds, []byte("project 1 2026-09-01T00:00:00Z\n\nproject one\nheading 1\nheading 11\narea 1\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	bad := newModel(ctx, store)
@@ -2364,7 +2455,7 @@ func TestNewerReleaseInTitleLine(t *testing.T) {
 	if title := strings.SplitN(plain(m), "\n", 2)[0]; !strings.Contains(title, "by deadline · "+notice) {
 		t.Errorf("title line by deadline = %q", title)
 	}
-	if m.status != "by deadline: open tasks under overdue, next 7 days, next 30 days, longer, no deadline" {
+	if m.status != "by deadline: open tasks under overdue, a week at a time, later, no deadline" {
 		t.Errorf("status = %q; the notice must leave it alone", m.status)
 	}
 	// Narrow terminals cut the notice before the view's name.

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Outline } from "./api";
 import {
-  LONGER,
-  MONTH,
+  LATER,
   NONE,
   OVERDUE,
-  WEEK,
+  THIS_WEEK,
+  bucketName,
   bucketOf,
   bucketSpan,
   containers,
@@ -14,6 +14,8 @@ import {
   deadlineRows,
   dueWords,
   findTask,
+  knownBucket,
+  ordinal,
   rowTarget,
   targetKey,
   treeRows,
@@ -72,7 +74,7 @@ describe("treeRows", () => {
 describe("deadlineRows", () => {
   it("orders open tasks by due date, undated last, under headings with counts", () => {
     // Tree order is task 3, 1, 2, 4, 5; due order disagrees: 1 (overdue),
-    // 2 (this week), 3 (longer), then the undated 4. Task 5 is done and
+    // 2 (this week), 3 (later), then the undated 4. Task 5 is done and
     // not listed.
     const rows = deadlineRows(fixture(), new Set(), today);
     expect(keys(rows)).toEqual([
@@ -80,7 +82,7 @@ describe("deadlineRows", () => {
       "task:1",
       "subtask:1",
       "subtask:2",
-      "heading:2",
+      "heading:6",
       "task:2",
       "heading:4",
       "task:3",
@@ -99,7 +101,7 @@ describe("deadlineRows", () => {
 
   it("keeps a folded heading's tasks out of the rows, and its count", () => {
     const rows = deadlineRows(fixture(), new Set([targetKey({ kind: "heading", id: OVERDUE })]), today);
-    expect(keys(rows).slice(0, 2)).toEqual(["heading:1", "heading:2"]);
+    expect(keys(rows).slice(0, 2)).toEqual(["heading:1", "heading:6"]);
     expect(rows[0]!.count).toBe(1);
   });
 
@@ -112,22 +114,48 @@ describe("deadlineRows", () => {
 });
 
 describe("buckets", () => {
-  it("puts the next 7 days from today and the next 30 after them", () => {
+  // 2026-10-07 is a Wednesday; its week began on Monday the 5th.
+  it("puts today's week and the four after it under their Mondays, then later", () => {
     expect(bucketOf("2026-10-06", today)).toBe(OVERDUE);
-    expect(bucketOf("2026-10-07", today)).toBe(WEEK);
-    expect(bucketOf("2026-10-13", today)).toBe(WEEK);
-    expect(bucketOf("2026-10-14", today)).toBe(MONTH);
-    expect(bucketOf("2026-11-05", today)).toBe(MONTH);
-    expect(bucketOf("2026-11-06", today)).toBe(LONGER);
+    expect(bucketOf("2026-10-07", today)).toBe(THIS_WEEK);
+    expect(bucketOf("2026-10-11", today)).toBe(THIS_WEEK);
+    expect(bucketOf("2026-10-12", today)).toBe(THIS_WEEK + 1);
+    expect(bucketOf("2026-10-18", today)).toBe(THIS_WEEK + 1);
+    expect(bucketOf("2026-11-02", today)).toBe(THIS_WEEK + 4);
+    expect(bucketOf("2026-11-08", today)).toBe(THIS_WEEK + 4);
+    expect(bucketOf("2026-11-09", today)).toBe(LATER);
+    expect(bucketOf("2027-01-01", today)).toBe(LATER);
     expect(bucketOf(undefined, today)).toBe(NONE);
     expect(bucketOf("", today)).toBe(NONE);
   });
 
+  it("names each week by its Monday", () => {
+    expect(bucketName(OVERDUE, today)).toBe("Overdue");
+    expect(bucketName(THIS_WEEK, today)).toBe("Week beginning 5th October");
+    expect(bucketName(THIS_WEEK + 1, today)).toBe("Week beginning 12th October");
+    expect(bucketName(THIS_WEEK + 2, today)).toBe("Week beginning 19th October");
+    expect(bucketName(THIS_WEEK + 3, today)).toBe("Week beginning 26th October");
+    expect(bucketName(THIS_WEEK + 4, today)).toBe("Week beginning 2nd November");
+    expect(bucketName(LATER, today)).toBe("Later");
+    expect(bucketName(NONE, today)).toBe("No deadline");
+    for (const b of [OVERDUE, THIS_WEEK, THIS_WEEK + 4, LATER, NONE]) expect(knownBucket(b)).toBe(true);
+    for (const b of [0, 2, 3, THIS_WEEK + 5]) expect(knownBucket(b)).toBe(false);
+    // A Monday's week starts that day, a Sunday's the Monday before; and
+    // the day of the month takes the right ending.
+    expect(bucketName(THIS_WEEK, "2026-10-12")).toBe("Week beginning 12th October");
+    expect(bucketName(THIS_WEEK, "2026-10-18")).toBe("Week beginning 12th October");
+    expect(bucketName(THIS_WEEK, "2026-11-01")).toBe("Week beginning 26th October");
+    expect(bucketName(THIS_WEEK + 1, "2026-12-29")).toBe("Week beginning 4th January");
+    for (const [n, want] of [[1, "1st"], [2, "2nd"], [3, "3rd"], [4, "4th"], [11, "11th"], [12, "12th"], [13, "13th"], [21, "21st"], [22, "22nd"], [23, "23rd"], [31, "31st"]] as const)
+      expect(ordinal(n)).toBe(want);
+  });
+
   it("says which dates each covers", () => {
     expect(bucketSpan(OVERDUE, today)).toBe("before 2026-10-07");
-    expect(bucketSpan(WEEK, today)).toBe("2026-10-07 to 2026-10-13");
-    expect(bucketSpan(MONTH, today)).toBe("2026-10-14 to 2026-11-05");
-    expect(bucketSpan(LONGER, today)).toBe("from 2026-11-06");
+    expect(bucketSpan(THIS_WEEK, today)).toBe("2026-10-07 to 2026-10-11");
+    expect(bucketSpan(THIS_WEEK + 1, today)).toBe("2026-10-12 to 2026-10-18");
+    expect(bucketSpan(THIS_WEEK + 4, today)).toBe("2026-11-02 to 2026-11-08");
+    expect(bucketSpan(LATER, today)).toBe("from 2026-11-09");
     expect(bucketSpan(NONE, today)).toBe("no due date");
   });
 

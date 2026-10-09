@@ -28,27 +28,85 @@ export function targetLabel(t: Target): string {
 export type View = "project" | "deadline";
 
 /** How soon a task is due, for the by-deadline headings. The values are
- * the headings' ids, so they never change. */
-export type Bucket = 1 | 2 | 3 | 4 | 5;
+ * the headings' ids, so they never change: a fold on "the week after
+ * next" stays on the week after next as the weeks go by. Overdue, Later
+ * and No deadline keep the ids they had before the weeks replaced Next 7
+ * days and Next 30 days, so a saved fold on them still means the same. */
+export type Bucket = number;
 export const OVERDUE: Bucket = 1;
-export const WEEK: Bucket = 2;
-export const MONTH: Bucket = 3;
-export const LONGER: Bucket = 4;
+/** Longer, until the weeks. */
+export const LATER: Bucket = 4;
 export const NONE: Bucket = 5;
+/** The week with today in it; the four after it follow. */
+export const THIS_WEEK: Bucket = 6;
+/** How many weeks get a heading of their own, this week included, before
+ * Later takes over. */
+export const WEEKS = 5;
 
-export function bucketName(b: Bucket): string {
-  switch (b) {
-    case OVERDUE:
-      return "Overdue";
-    case WEEK:
-      return "Next 7 days";
-    case MONTH:
-      return "Next 30 days";
-    case LONGER:
-      return "Longer";
-    default:
-      return "No deadline";
+/** Whether b is one of the week headings. */
+export function isWeek(b: Bucket): boolean {
+  return b >= THIS_WEEK && b < THIS_WEEK + WEEKS;
+}
+
+/** Whether b is a heading. 2 and 3 were once, Next 7 days and Next 30
+ * days; a saved fold on one is dropped rather than landing on a week. */
+export function knownBucket(b: Bucket): boolean {
+  return b === OVERDUE || b === LATER || b === NONE || isWeek(b);
+}
+
+const MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+/** A day of the month in words: 1st, 2nd, 3rd, 4th, 11th, 21st. */
+export function ordinal(n: number): string {
+  let suffix = "th";
+  if (Math.floor(n / 10) % 10 !== 1) {
+    switch (n % 10) {
+      case 1:
+        suffix = "st";
+        break;
+      case 2:
+        suffix = "nd";
+        break;
+      case 3:
+        suffix = "rd";
+        break;
+    }
   }
+  return `${n}${suffix}`;
+}
+
+/** How many days today is into its week: 0 on a Monday, 6 on a Sunday. */
+export function sinceMonday(today: string): number {
+  return (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7;
+}
+
+/** The Monday of the week today is in, YYYY-MM-DD. */
+export function weekStart(today: string): string {
+  return dayFrom(today, -sinceMonday(today));
+}
+
+/** The heading for a bucket. A week is named by its Monday. */
+export function bucketName(b: Bucket, today: string): string {
+  if (b === OVERDUE) return "Overdue";
+  if (isWeek(b)) {
+    const monday = new Date(`${dayFrom(weekStart(today), 7 * (b - THIS_WEEK))}T00:00:00Z`);
+    return `Week beginning ${ordinal(monday.getUTCDate())} ${MONTHS[monday.getUTCMonth()]}`;
+  }
+  if (b === LATER) return "Later";
+  return "No deadline";
 }
 
 /** Today as YYYY-MM-DD in the browser's own zone, which is the zone the
@@ -79,31 +137,29 @@ export function dayFrom(today: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** How soon a due date is. The next 7 days start today; the next 30
- * start where the 7 end. */
+/** How soon a due date is: overdue before today, then the week today is
+ * in and the four after it, Monday to Sunday, then later. */
 export function bucketOf(due: string | undefined, today: string): Bucket {
   const days = daysUntil(due, today);
   if (days === null) return NONE;
   if (days < 0) return OVERDUE;
-  if (days < 7) return WEEK;
-  if (days < 30) return MONTH;
-  return LONGER;
+  // Whole days from Monday to the due date; the week is that over 7.
+  const week = Math.floor((days + sinceMonday(today)) / 7);
+  return week < WEEKS ? THIS_WEEK + week : LATER;
 }
 
-/** Which dates a bucket covers, for the detail pane. */
+/** Which dates a bucket covers, for the detail pane. This week starts at
+ * today, since what was due earlier in it is overdue. */
 export function bucketSpan(b: Bucket, today: string): string {
-  switch (b) {
-    case OVERDUE:
-      return "before " + today;
-    case WEEK:
-      return today + " to " + dayFrom(today, 6);
-    case MONTH:
-      return dayFrom(today, 7) + " to " + dayFrom(today, 29);
-    case LONGER:
-      return "from " + dayFrom(today, 30);
-    default:
-      return "no due date";
+  const monday = weekStart(today);
+  if (b === OVERDUE) return "before " + today;
+  if (b === THIS_WEEK) return today + " to " + dayFrom(monday, 6);
+  if (isWeek(b)) {
+    const start = dayFrom(monday, 7 * (b - THIS_WEEK));
+    return start + " to " + dayFrom(start, 6);
   }
+  if (b === LATER) return "from " + dayFrom(monday, 7 * WEEKS);
+  return "no due date";
 }
 
 /** Whether a is due before b, with an undated task after any dated one. */
@@ -287,7 +343,7 @@ export function deadlineRows(o: Outline, folded: Set<string>, today: string): Ro
     counts.set(b, (counts.get(b) ?? 0) + 1);
   }
   const rows: Row[] = [];
-  let last: Bucket | 0 = 0;
+  let last: Bucket = 0;
   for (const g of groups) {
     const b = bucketOf(g.due, today);
     if (b !== last) {

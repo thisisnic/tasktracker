@@ -4,7 +4,7 @@
 //   home (area 1)
 //     garden (area 2)
 //       maintenance (project 2)
-//         mow the lawn (task 3, due 2026-11-20, longer)
+//         mow the lawn (task 3, due 2026-11-20, later)
 //     house (project 1)
 //       paint the hall (task 1, due 2026-09-10, overdue)
 //         [x] buy paint (subtask 1)

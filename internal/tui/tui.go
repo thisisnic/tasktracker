@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -147,60 +148,122 @@ type row struct {
 }
 
 // bucket is how soon a task is due, for the by-deadline headings. The
-// values are the headings' ids in the fold map, so they never change.
+// values are the headings' ids in the fold map, so they never change: a
+// fold on "the week after next" stays on the week after next as the
+// weeks go by. Overdue, Later and No deadline keep the ids they had
+// before the weeks replaced Next 7 days and Next 30 days, so a saved fold
+// on them still means the same.
 type bucket int64
 
 const (
-	bucketOverdue bucket = iota + 1
-	bucketWeek
-	bucketMonth
-	bucketLonger
-	bucketNone
+	bucketOverdue  bucket = 1
+	bucketLater    bucket = 4 // Longer, until the weeks
+	bucketNone     bucket = 5
+	bucketThisWeek bucket = 6 // the week with today in it; the four after it follow
 )
 
-func (b bucket) String() string {
-	switch b {
-	case bucketOverdue:
+// weeks is how many weeks get a heading of their own, this week included,
+// before Later takes over.
+const weeks = 5
+
+// isWeek says whether b is one of the week headings.
+func (b bucket) isWeek() bool {
+	return b >= bucketThisWeek && b < bucketThisWeek+weeks
+}
+
+// known says whether b is a heading.
+func (b bucket) known() bool {
+	return b == bucketOverdue || b == bucketLater || b == bucketNone || b.isWeek()
+}
+
+// retired says whether b was a heading once: 2 was Next 7 days and 3
+// Next 30 days. A saved fold on one is dropped on load rather than
+// landing on a week.
+func (b bucket) retired() bool {
+	return b == 2 || b == 3
+}
+
+// sameDay says whether a and b fall on the same calendar day.
+func sameDay(a, b time.Time) bool {
+	y1, m1, d1 := a.Date()
+	y2, m2, d2 := b.Date()
+	return y1 == y2 && m1 == m2 && d1 == d2
+}
+
+// sinceMonday is how many days today is into its week: 0 on a Monday, 6
+// on a Sunday.
+func sinceMonday(today time.Time) int {
+	return (int(today.Weekday()) + 6) % 7
+}
+
+// weekStart is the Monday of the week today is in.
+func weekStart(today time.Time) time.Time {
+	y, m, d := today.Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, today.Location()).AddDate(0, 0, -sinceMonday(today))
+}
+
+// ordinal is a day of the month in words: 1st, 2nd, 3rd, 4th, 11th, 21st.
+func ordinal(n int) string {
+	suffix := "th"
+	if n/10%10 != 1 {
+		switch n % 10 {
+		case 1:
+			suffix = "st"
+		case 2:
+			suffix = "nd"
+		case 3:
+			suffix = "rd"
+		}
+	}
+	return strconv.Itoa(n) + suffix
+}
+
+// name is the heading for a bucket. A week is named by its Monday.
+func (b bucket) name(today time.Time) string {
+	switch {
+	case b == bucketOverdue:
 		return "Overdue"
-	case bucketWeek:
-		return "Next 7 days"
-	case bucketMonth:
-		return "Next 30 days"
-	case bucketLonger:
-		return "Longer"
+	case b.isWeek():
+		monday := weekStart(today).AddDate(0, 0, 7*int(b-bucketThisWeek))
+		return "Week beginning " + ordinal(monday.Day()) + " " + monday.Month().String()
+	case b == bucketLater:
+		return "Later"
 	}
 	return "No deadline"
 }
 
-// bucketOf says how soon a due date is. The next 7 days start today; the
-// next 30 start where the 7 end.
+// bucketOf says how soon a due date is: overdue before today, then the
+// week today is in and the four after it, Monday to Sunday, then later.
 func bucketOf(due string, today time.Time) bucket {
 	days, ok := task.Task{Due: due}.DaysUntilDue(today)
-	switch {
-	case !ok:
+	if !ok {
 		return bucketNone
-	case days < 0:
-		return bucketOverdue
-	case days < 7:
-		return bucketWeek
-	case days < 30:
-		return bucketMonth
 	}
-	return bucketLonger
+	if days < 0 {
+		return bucketOverdue
+	}
+	// Whole days from Monday to the due date; the week is that over 7.
+	if week := (days + sinceMonday(today)) / 7; week < weeks {
+		return bucketThisWeek + bucket(week)
+	}
+	return bucketLater
 }
 
-// span says which dates a bucket covers, for the detail pane.
+// span says which dates a bucket covers, for the detail pane. This week
+// starts at today, since what was due earlier in it is overdue.
 func (b bucket) span(today time.Time) string {
-	day := func(n int) string { return today.AddDate(0, 0, n).Format("2006-01-02") }
-	switch b {
-	case bucketOverdue:
-		return "before " + day(0)
-	case bucketWeek:
-		return day(0) + " to " + day(6)
-	case bucketMonth:
-		return day(7) + " to " + day(29)
-	case bucketLonger:
-		return "from " + day(30)
+	date := func(t time.Time) string { return t.Format("2006-01-02") }
+	monday := weekStart(today)
+	switch {
+	case b == bucketOverdue:
+		return "before " + date(today)
+	case b == bucketThisWeek:
+		return date(today) + " to " + date(monday.AddDate(0, 0, 6))
+	case b.isWeek():
+		start := monday.AddDate(0, 0, 7*int(b-bucketThisWeek))
+		return date(start) + " to " + date(start.AddDate(0, 0, 6))
+	case b == bucketLater:
+		return "from " + date(monday.AddDate(0, 0, 7*weeks))
 	}
 	return "no due date"
 }
@@ -236,6 +299,7 @@ type model struct {
 	outline    task.Outline
 	areas      []task.Area // every area, flat, for paths and pick lists
 	rows       []row
+	day        time.Time // when the rows were last built: the day the buckets are from
 	cursor     int
 	width      int
 	height     int
@@ -441,6 +505,7 @@ func (m *model) pruneFolds() error {
 // under a heading for how soon they are due, skipping what is inside a
 // collapsed heading.
 func (m *model) rebuildRows() {
+	m.day = m.now()
 	m.rows = m.rows[:0]
 	if m.view == viewDeadline {
 		m.rows = append(m.rows, m.deadlineRows()...)
@@ -474,8 +539,8 @@ func (m *model) rebuildRows() {
 
 // deadlineRows lists every open task in the outline with its subtasks,
 // ordered by due date with undated tasks last, under a heading for each
-// bucket that has any: overdue, the next 7 days, the next 30, longer, and
-// no deadline. A collapsed heading keeps its tasks out of the rows. Done
+// bucket that has any: overdue, this week and the four after it, later,
+// and no deadline. A collapsed heading keeps its tasks out of the rows. Done
 // and dropped tasks are not coming up, so they are left out; the
 // by-project view keeps them until archived. Tasks due the same day, and
 // undated ones, keep their by-project order, so the list is stable across
@@ -500,7 +565,7 @@ func (m *model) deadlineRows() []row {
 		return sooner(task.Task{Due: groups[i].due}, task.Task{Due: groups[j].due})
 	})
 	// Groups are in bucket order, so each heading's tasks are one run.
-	today := m.now()
+	today := m.day
 	counts := map[bucket]int{}
 	for _, g := range groups {
 		counts[bucketOf(g.due, today)]++
@@ -536,7 +601,7 @@ func (r row) target() target {
 
 // headingOf is the by-deadline heading a task or subtask row is under.
 func (m *model) headingOf(r row) target {
-	return target{rowHeading, int64(bucketOf(r.task.Task.Due, m.now()))}
+	return target{rowHeading, int64(bucketOf(r.task.Task.Due, m.day))}
 }
 
 // areaOf is the area a row is in: the area itself for an area row, and
@@ -668,6 +733,8 @@ func (m *model) poll() {
 	found := err == nil && v != m.loaded
 	if found {
 		err = m.refresh()
+	} else if err == nil {
+		m.turnOfDay()
 	}
 	// A poll's own error, such as a lock held for a moment by the CLI,
 	// is cleared by the next poll that goes well; an error from the last
@@ -687,6 +754,28 @@ func (m *model) poll() {
 // since another process may have changed any of it.
 func (m *model) refresh() error {
 	return m.reload()
+}
+
+// turnOfDay regroups the rows when midnight has passed since they were
+// built, so a UI left open overnight buckets by deadline from the new
+// day: what fell due is overdue, and the week headings are the new
+// week's. The headings take their names and spans from the same day as
+// the grouping, so they always agree. The rows follow the date, so the
+// selection is found again where it went.
+func (m *model) turnOfDay() {
+	if sameDay(m.now(), m.day) {
+		return
+	}
+	var keep *target
+	if r, ok := m.selected(); ok {
+		t := r.target()
+		keep = &t
+	}
+	m.rebuildRows()
+	if keep != nil {
+		m.selectNear(*keep)
+	}
+	m.clampCursor()
 }
 
 // footer renders the status and help lines wrapped to the terminal width.
@@ -808,7 +897,7 @@ func (m *model) updateBrowse(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		from, _ := m.selected()
 		if m.view == viewTree {
 			m.view = viewDeadline
-			m.status = "by deadline: open tasks under overdue, next 7 days, next 30 days, longer, no deadline"
+			m.status = "by deadline: open tasks under overdue, a week at a time, later, no deadline"
 		} else {
 			m.view = viewTree
 			m.status = "by project"
@@ -970,7 +1059,7 @@ func (m *model) landByProject(from row) {
 	}
 	var first *task.Task
 	m.eachTask(func(_ task.ProjectNode, tk task.TaskNode) bool {
-		if tk.Task.Open() && bucketOf(tk.Task.Due, m.now()) == from.bucket {
+		if tk.Task.Open() && bucketOf(tk.Task.Due, m.day) == from.bucket {
 			first = &tk.Task
 			return false
 		}
@@ -1076,9 +1165,9 @@ func (m *model) toggleFold() {
 			empty = "the area is empty"
 		}
 	case r.kind == rowHeading:
-		t, name, held = r.target(), r.bucket.String(), "its tasks"
+		t, name, held = r.target(), r.bucket.name(m.day), "its tasks"
 	case m.view == viewDeadline:
-		t, name, held = m.headingOf(r), bucketOf(r.task.Task.Due, m.now()).String(), "its tasks"
+		t, name, held = m.headingOf(r), bucketOf(r.task.Task.Due, m.day).name(m.day), "its tasks"
 	default:
 		t, made, name, held = target{rowProject, r.project.Project.ID}, stamp(r.project.Project.CreatedAt), r.project.Project.Name, "its tasks"
 		if len(r.project.Tasks) == 0 {
@@ -1142,7 +1231,7 @@ func (m *model) deadlineContainer(t target) (target, bool) {
 	if !ok || !found.Open() {
 		return target{}, false
 	}
-	return target{rowHeading, int64(bucketOf(found.Due, m.now()))}, true
+	return target{rowHeading, int64(bucketOf(found.Due, m.day))}, true
 }
 
 // containers lists what t is inside, outermost first: the areas around
@@ -1517,7 +1606,7 @@ func (m *model) viewRow(r row, selected bool, w int) string {
 	indent := strings.Repeat("  ", r.depth)
 	switch r.kind {
 	case rowHeading:
-		left = m.foldMark(r.target()) + r.bucket.String()
+		left = m.foldMark(r.target()) + r.bucket.name(m.day)
 		if r.count == 1 {
 			right = "1 task"
 		} else {
@@ -1637,8 +1726,8 @@ func (m *model) viewDetail(w int) string {
 	var lines []string
 	switch r.kind {
 	case rowHeading:
-		lines = append(lines, strings.Split(wrap.Bold(true).Render(r.bucket.String()), "\n")...)
-		lines = append(lines, label("due  ", r.bucket.span(m.now())))
+		lines = append(lines, strings.Split(wrap.Bold(true).Render(r.bucket.name(m.day)), "\n")...)
+		lines = append(lines, label("due  ", r.bucket.span(m.day)))
 		lines = append(lines, label("tasks", fmt.Sprintf("%d open", r.count)))
 		if m.collapsed[r.target()] {
 			lines = append(lines, "", dimStyle.Render("collapsed; ← shows its tasks"))

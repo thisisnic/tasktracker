@@ -18,7 +18,7 @@
     if (!row) return "";
     switch (row.kind) {
       case "heading":
-        return bucketName(row.bucket!);
+        return bucketName(row.bucket!, app.today);
       case "area":
         return row.area!.area.name;
       case "project":

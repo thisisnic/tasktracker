@@ -31,6 +31,7 @@ import {
   eachProject,
   eachTask,
   headingOf,
+  knownBucket,
   indexOf,
   rowTarget,
   sameTarget,
@@ -294,8 +295,8 @@ export class AppState {
 
   /** Moves the page's date on when midnight has passed, so a page left
    * open overnight buckets by deadline from the new day, as the terminal
-   * UI reads the clock each time it draws. The rows follow the date, so
-   * the selection is found again where it went. */
+   * UI does at its next poll. The rows follow the date, so the selection
+   * is found again where it went. */
   turnOfDay(): void {
     const today = todayStr(this.now());
     if (today === this.today) return;
@@ -405,9 +406,10 @@ export class AppState {
 
   /** Forgets folds on areas and projects whose id now belongs to a row
    * made at another time, so a deleted row's fold cannot land on
-   * whatever next reuses its id. A fold whose row is not listed is kept:
-   * a finished project hidden until f still exists, and keeps its fold
-   * for when it shows again. */
+   * whatever next reuses its id, and folds on headings that are no
+   * longer headings. A fold whose row is not listed is kept: a finished
+   * project hidden until f still exists, and keeps its fold for when it
+   * shows again. */
   private pruneFolds(): void {
     const present = new Map<string, string>();
     for (const a of this.areas) present.set(targetKey({ kind: "area", id: a.id }), a.created_at);
@@ -418,7 +420,8 @@ export class AppState {
     const folds = { ...this.folds };
     for (const [k, made] of Object.entries(folds)) {
       const now = present.get(k);
-      if (now !== undefined && now !== made) {
+      const [kind, id] = k.split(":");
+      if ((kind === "heading" && !knownBucket(Number(id))) || (now !== undefined && now !== made)) {
         delete folds[k];
         pruned = true;
       }
@@ -464,11 +467,11 @@ export class AppState {
       if (r.area!.areas.length + r.area!.projects.length === 0) empty = "the area is empty";
     } else if (r.kind === "heading") {
       t = rowTarget(r);
-      name = bucketName(r.bucket!);
+      name = bucketName(r.bucket!, this.today);
       held = "its tasks";
     } else if (this.view === "deadline") {
       t = headingOf(r, this.today);
-      name = bucketName(bucketOf(r.task!.task.due, this.today));
+      name = bucketName(bucketOf(r.task!.task.due, this.today), this.today);
       held = "its tasks";
     } else {
       t = { kind: "project", id: r.project!.project.id };
@@ -642,7 +645,7 @@ export class AppState {
     const keep = this.selectedTarget();
     if (this.view === "project") {
       this.view = "deadline";
-      this.status = "by deadline: open tasks under overdue, next 7 days, next 30 days, longer, no deadline";
+      this.status = "by deadline: open tasks under overdue, a week at a time, later, no deadline";
     } else {
       this.view = "project";
       this.status = "by project";
